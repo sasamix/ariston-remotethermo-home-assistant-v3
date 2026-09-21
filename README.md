@@ -1,3 +1,8 @@
+<!-- SASAMIX_FORK -->
+> **sasamix fork.** This branch keeps the upstream Ariston integration and adds the GALEVO features tested on Home Assistant: 30-second DHW time-program refresh, Economy/Comfort active target handling, DHW scenario selection, native R2 gas metering in m³, stable Energy counters, and stale empty-device cleanup.
+>
+> The integration remains pinned to `ariston==0.19.9`. For HACS, add this repository as a custom **Integration** repository; the fork can be installed directly from the default branch.
+
 [![CodeQL](https://github.com/fustom/ariston-remotethermo-home-assistant-v3/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/fustom/ariston-remotethermo-home-assistant-v3/actions/workflows/codeql.yml)
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-orange.svg)](https://github.com/hacs/integration)
 [![HACS Action](https://github.com/fustom/ariston-remotethermo-home-assistant-v3/actions/workflows/hacs.yml/badge.svg)](https://github.com/fustom/ariston-remotethermo-home-assistant-v3/actions/workflows/hacs.yml)
