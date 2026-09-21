@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from homeassistant.components.text import TextEntity, TextEntityDescription, TextMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -11,6 +13,13 @@ from .const import COORDINATOR, DOMAIN
 from .coordinator import DeviceDataUpdateCoordinator
 from .dhw_scenarios import DHW_SCENARIO_MANAGER
 from .entity import AristonEntity
+
+
+@dataclass(kw_only=True, frozen=True)
+class AristonTextEntityDescription(TextEntityDescription):
+    """Text description compatible with AristonEntity."""
+
+    extra_states: list | None = None
 
 
 async def async_setup_entry(
@@ -29,7 +38,7 @@ async def async_setup_entry(
 class AristonDhwScenarioName(AristonEntity, TextEntity):
     """Name entered by the user for the currently loaded DHW schedule."""
 
-    entity_description = TextEntityDescription(
+    entity_description = AristonTextEntityDescription(
         key="DhwScenarioName",
         name="Ariston DHW scenario name",
         icon="mdi:form-textbox",
