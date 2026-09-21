@@ -17,6 +17,7 @@ from .const import (
     ARISTON_WATER_HEATER_TYPES,
     DOMAIN,
     AristonWaterHeaterEntityDescription,
+    get_dhw_active_target_temperature,
 )
 from .coordinator import DeviceDataUpdateCoordinator
 from .entity import AristonEntity
@@ -33,7 +34,6 @@ async def async_setup_entry(
         coordinator: DeviceDataUpdateCoordinator = hass.data[DOMAIN][entry.unique_id][
             description.coordinator
         ]
-
         if (
             coordinator
             and coordinator.device
@@ -86,8 +86,8 @@ class AristonWaterHeater(AristonEntity, WaterHeaterEntity):
 
     @property
     def target_temperature(self):
-        """Return the temperature we try to reach."""
-        return self.device.water_heater_target_temperature
+        """Return the currently active DHW target temperature."""
+        return get_dhw_active_target_temperature(self.device)
 
     @property
     def max_temp(self):
@@ -113,7 +113,7 @@ class AristonWaterHeater(AristonEntity, WaterHeaterEntity):
         if (
             self.device.system_type == SystemType.VELIS
             and "ON_OFF"
-            in WaterHeaterEntityFeature.__members__  # check entity feature for backward compatibility
+            in WaterHeaterEntityFeature.__members__
         ):
             features |= WaterHeaterEntityFeature.ON_OFF
         return features
@@ -132,7 +132,6 @@ class AristonWaterHeater(AristonEntity, WaterHeaterEntity):
         """Set new target temperature."""
         if ATTR_TEMPERATURE not in kwargs:
             raise ValueError(f"Missing parameter {ATTR_TEMPERATURE}")
-
         temperature = kwargs[ATTR_TEMPERATURE]
         _LOGGER.debug(
             "Setting temperature to %d for %s",
