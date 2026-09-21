@@ -1,7 +1,7 @@
 <!-- SASAMIX_FORK -->
 > **sasamix fork.** This branch keeps the upstream Ariston integration and adds the GALEVO features tested on Home Assistant: 30-second DHW time-program refresh, Economy/Comfort active target handling, DHW scenario selection, native R2 gas metering in m³, stable Energy counters, and stale empty-device cleanup.
 >
-> The integration remains pinned to `ariston==0.19.9`. For HACS, add this repository as a custom **Integration** repository; the fork can be installed directly from the default branch.
+> The integration remains pinned to `ariston==0.19.9`. The Home Assistant domain stays `ariston`, and existing entity unique IDs are intentionally preserved so switching to this fork does not create a second integration or discard Recorder history. For HACS, add this repository as a custom **Integration** repository; the fork can be installed directly from the default branch.
 
 [![CodeQL](https://github.com/fustom/ariston-remotethermo-home-assistant-v3/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/fustom/ariston-remotethermo-home-assistant-v3/actions/workflows/codeql.yml)
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-orange.svg)](https://github.com/hacs/integration)
@@ -39,8 +39,15 @@ But it does not use Ariston website. It uses Ariston API what I reversed enginee
 Feel free to test something else and create new issue / pull request if something goes wrong.
 
 ## Installation
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=fustom&repository=ariston-remotethermo-home-assistant-v3&category=integration) or copy ariston folder to your configuration/custom_components path.
-Use the add integration UI to set up your device.
+[![Open your Home Assistant instance and open this repository inside HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=sasamix&repository=ariston-remotethermo-home-assistant-v3&category=integration)
+
+For a new installation, add this repository to HACS as a custom **Integration** repository and download it.
+
+### Migrating an existing Ariston installation without losing data
+
+Do **not** delete the Ariston config entry from **Settings → Devices & services**. The fork deliberately keeps the same Home Assistant domain (`ariston`) and the same entity unique IDs, including the custom R2 gas Energy sensors. Existing entity registry entries, entity IDs, Recorder statistics and Energy Dashboard history therefore remain associated with the same entities.
+
+Before changing the HACS source, create a normal Home Assistant backup. Then switch only the integration files/repository source. Do not delete Recorder statistics or remove/re-add the Ariston integration. See [MIGRATION.md](MIGRATION.md) for the safe procedure.
 
 | ![Kazam_screenshot_00003](https://user-images.githubusercontent.com/6751243/146653448-ff7b6f9d-cbf1-4555-9a75-61bf68bc9d3e.png) | ![Kazam_screenshot_00004](https://user-images.githubusercontent.com/6751243/146653484-52e39d78-7c6f-44ae-888d-acf246147290.png) | ![Kazam_screenshot_00010](https://user-images.githubusercontent.com/6751243/147890590-6c4ebf38-16d9-421f-9b81-8f43298ec62f.png) |
 :-------------------------:|:-------------------------:|:-------------------------:
