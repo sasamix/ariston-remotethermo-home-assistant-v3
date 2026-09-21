@@ -1,0 +1,189 @@
+"""Home Assistant-managed DHW scenario names and schedules."""
+
+from __future__ import annotations
+
+from copy import deepcopy
+import logging
+
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
+
+from .const import DHW_SCENARIOS, DOMAIN
+from .coordinator import DeviceDataUpdateCoordinator
+
+_LOGGER = logging.getLogger(__name__)
+
+DHW_SCENARIO_MANAGER = "dhw_scenario_manager"
+_STORAGE_VERSION = 1
+
+
+def _plan_signature(plan):
+    """Return a stable signature for comparing DHW weekly plans."""
+    if not isinstance(plan, dict):
+        return None
+
+    normalized = []
+    for day_plan in plan.get("plans", []):
+        days = tuple(sorted(day_plan.get("days", [])))
+        slices = tuple(
+            (item.get("from", 0), item.get("temp", 0))
+            for item in day_plan.get("slices", [])
+        )
+        normalized.append((days, slices))
+
+    return tuple(sorted(normalized)) if normalized else None
+
+
+class DhwScenarioManager:
+    """Persist user-defined names for schedules that Ariston returns unnamed."""
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        coordinator: DeviceDataUpdateCoordinator,
+    ) -> None:
+        self.hass = hass
+        self.entry = entry
+        self.coordinator = coordinator
+        self.device = coordinator.device
+        self.store = Store(
+            hass,
+            _STORAGE_VERSION,
+            f"{DOMAIN}.dhw_scenarios.{entry.entry_id}",
+        )
+        self.custom_scenarios: dict[str, dict] = {}
+        self.draft_name = ""
+
+    async def async_load(self) -> None:
+        """Load user-defined DHW scenarios from Home Assistant storage."""
+        data = await self.store.async_load() or {}
+        scenarios = data.get("scenarios", {})
+        if isinstance(scenarios, dict):
+            self.custom_scenarios = {
+                str(name): scenario
+                for name, scenario in scenarios.items()
+                if isinstance(name, str) and isinstance(scenario, dict)
+            }
+
+        current = self.current_name
+        if current and current in self.custom_scenarios:
+            self.draft_name = current
+
+    @property
+    def options(self) -> list[str]:
+        """Return built-in and Home Assistant-defined scenario names."""
+        return list(DHW_SCENARIOS) + [
+            name for name in self.custom_scenarios if name not in DHW_SCENARIOS
+        ]
+
+    @property
+    def current_name(self) -> str | None:
+        """Return the name whose stored schedule matches the current Ariston plan."""
+        program_data = getattr(self.device, "dhw_time_program", None) or {}
+        current = program_data.get("Dhw", {})
+        current_signature = _plan_signature(current)
+        if current_signature is None:
+            return None
+
+        for name, scenario in DHW_SCENARIOS.items():
+            if current_signature == _plan_signature(scenario):
+                return name
+
+        for name, scenario in self.custom_scenarios.items():
+            if current_signature == _plan_signature(scenario):
+                return name
+
+        return None
+
+    async def async_save_current(self, name: str) -> None:
+        """Save the current cloud schedule under a user supplied HA name."""
+        name = (name or "").strip()
+        if not name:
+            raise ValueError("DHW scenario name must not be empty")
+        if name in DHW_SCENARIOS:
+            raise ValueError(
+                f"'{name}' is a built-in DHW scenario name; choose another name"
+            )
+
+        program_data = getattr(self.device, "dhw_time_program", None) or {}
+        current = program_data.get("Dhw")
+        if not isinstance(current, dict) or not current.get("plans"):
+            raise RuntimeError("Current Ariston DHW schedule is unavailable")
+
+        # Keep only the schedule payload. No credentials, gateway id or account data
+        # are written to HA storage.
+        saved = {
+            "ext": current.get("ext", False),
+            "plans": deepcopy(current.get("plans", [])),
+            "allowedTemp": deepcopy(current.get("allowedTemp", [0, 1])),
+            "defaultTemp": current.get("defaultTemp", 0),
+            "baseTemp": current.get("baseTemp", 0),
+            "tick": current.get("tick", 0),
+            "maxSwitches": current.get("maxSwitches", 0),
+            "pilot": deepcopy(current.get("pilot")),
+        }
+
+        self.custom_scenarios[name] = saved
+        self.draft_name = name
+        await self.store.async_save({"scenarios": self.custom_scenarios})
+
+        _LOGGER.info("Saved current Ariston DHW schedule as '%s'", name)
+        self.coordinator.async_set_updated_data(self.coordinator.data)
+
+    async def async_apply(self, name: str) -> None:
+        """Apply a built-in or HA-defined DHW scenario through Ariston API v2."""
+        scenario = DHW_SCENARIOS.get(name)
+        if scenario is None:
+            scenario = self.custom_scenarios.get(name)
+        if scenario is None:
+            raise ValueError(f"Unknown DHW scenario: {name}")
+
+        api = self.device.api
+        base_url = getattr(api, "_AristonAPI__api_url", None)
+        if not base_url:
+            raise RuntimeError("Ariston API base URL unavailable")
+
+        umsys = getattr(self.device, "umsys", None)
+        if umsys is None:
+            umsys = getattr(self.device, "_umsys", None)
+        suffix = f"?umsys={umsys}" if umsys is not None else ""
+        url = f"{base_url}remote/timeProgs/{self.device.gw}/Dhw{suffix}"
+
+        weekly_plan = {
+            "ext": scenario.get("ext", False),
+            "plans": deepcopy(scenario["plans"]),
+            "allowedTemp": deepcopy(scenario.get("allowedTemp", [0, 1])),
+            "defaultTemp": scenario.get("defaultTemp", 0),
+            "baseTemp": scenario.get("baseTemp", 0),
+            "tick": scenario.get("tick", 0),
+            "maxSwitches": scenario.get("maxSwitches", 0),
+            "pilot": deepcopy(scenario.get("pilot")),
+        }
+
+        await api._async_post(url, weekly_plan)
+        new_program = await api._async_get(url)
+        if not isinstance(new_program, dict) or "Dhw" not in new_program:
+            raise RuntimeError("Ariston did not return the DHW program after write")
+
+        self.device.dhw_time_program = new_program
+        self.draft_name = name if name in self.custom_scenarios else ""
+        self.coordinator.async_set_updated_data(self.coordinator.data)
+
+
+async def async_setup_dhw_scenario_manager(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    coordinator: DeviceDataUpdateCoordinator,
+) -> DhwScenarioManager:
+    """Create and load the manager once for this config entry."""
+    entry_data = hass.data[DOMAIN][entry.unique_id]
+    manager = entry_data.get(DHW_SCENARIO_MANAGER)
+    if manager is not None:
+        return manager
+
+    manager = DhwScenarioManager(hass, entry, coordinator)
+    await manager.async_load()
+    entry_data[DHW_SCENARIO_MANAGER] = manager
+    return manager
