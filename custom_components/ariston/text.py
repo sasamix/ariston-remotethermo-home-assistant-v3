@@ -57,6 +57,6 @@ class AristonDhwScenarioName(AristonEntity, TextEntity):
         return self.manager.draft_name
 
     async def async_set_value(self, value: str) -> None:
-        """Update the draft; saving is explicit through the button entity."""
-        self.manager.draft_name = value.strip()
+        """Save the current Ariston DHW schedule under the entered name."""
+        await self.manager.async_save_current(value)
         self.async_write_ha_state()
