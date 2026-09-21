@@ -70,8 +70,9 @@ Home Assistant name for the currently active schedule.
 
 For GALEVO systems the integration adds:
 
-- `text.*ariston_dhw_scenario_name` — enter a name for the schedule currently read from Ariston.
-- `button.*ariston_save_current_dhw_scenario` — save that name and schedule in Home Assistant.
+- `text.*ariston_dhw_scenario_name` — enter a name for the schedule currently read from Ariston;
+  submitting the value saves the current schedule under that name in Home Assistant.
+- `button.*ariston_save_current_dhw_scenario` — optional explicit save control.
 - `select.*ariston_dhw_scenario` — after saving, the custom name is recognized automatically
   and can be selected again to re-apply the stored weekly schedule.
 
