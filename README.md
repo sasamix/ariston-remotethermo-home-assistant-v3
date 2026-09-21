@@ -60,3 +60,20 @@ Before changing the HACS source, create a normal Home Assistant backup. Then swi
 :-------------------------:|:-------------------------:
 
 <h1 align="center">Peace Love Freedom</h1>
+
+
+## Home Assistant-managed DHW scenario names
+
+The Ariston mobile app can keep user-defined scenario names locally on the phone while the
+cloud API exposes only the DHW weekly schedule. This fork can therefore store a local
+Home Assistant name for the currently active schedule.
+
+For GALEVO systems the integration adds:
+
+- `text.*ariston_dhw_scenario_name` — enter a name for the schedule currently read from Ariston.
+- `button.*ariston_save_current_dhw_scenario` — save that name and schedule in Home Assistant.
+- `select.*ariston_dhw_scenario` — after saving, the custom name is recognized automatically
+  and can be selected again to re-apply the stored weekly schedule.
+
+Only the schedule payload and the user-supplied name are stored in Home Assistant.
+Credentials, gateway identifiers and account data are not stored in this scenario mapping.
