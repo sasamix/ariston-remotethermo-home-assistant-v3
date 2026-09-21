@@ -48,16 +48,19 @@ from .const import (
     ENERGY_SCAN_INTERVAL,
 )
 from .coordinator import DeviceDataUpdateCoordinator
+from .dhw_scenarios import async_setup_dhw_scenario_manager
 
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[str] = [
     Platform.BINARY_SENSOR,
+    Platform.BUTTON,
     Platform.CLIMATE,
     Platform.NUMBER,
     Platform.SELECT,
     Platform.SENSOR,
     Platform.SWITCH,
+    Platform.TEXT,
     Platform.WATER_HEATER,
 ]
 
@@ -162,6 +165,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
         hass.data[DOMAIN][entry.unique_id][COORDINATOR] = coordinator
         await coordinator.async_config_entry_first_refresh()
+
+        # Load Home Assistant-managed names for DHW schedules. Ariston's API
+        # returns the weekly plan but not user-defined scenario names from the
+        # mobile app, so HA stores only the local name -> schedule mapping.
+        if device.system_type == SystemType.GALEVO:
+            await async_setup_dhw_scenario_manager(hass, entry, coordinator)
 
         # Refresh only the lightweight DHW schedule every 30 seconds.
         if device.system_type == SystemType.GALEVO:
