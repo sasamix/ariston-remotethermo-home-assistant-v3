@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -11,6 +13,13 @@ from .const import COORDINATOR, DOMAIN
 from .coordinator import DeviceDataUpdateCoordinator
 from .dhw_scenarios import DHW_SCENARIO_MANAGER
 from .entity import AristonEntity
+
+
+@dataclass(kw_only=True, frozen=True)
+class AristonButtonEntityDescription(ButtonEntityDescription):
+    """Button description compatible with AristonEntity."""
+
+    extra_states: list | None = None
 
 
 async def async_setup_entry(
@@ -29,7 +38,7 @@ async def async_setup_entry(
 class AristonSaveCurrentDhwScenario(AristonEntity, ButtonEntity):
     """Save the currently loaded Ariston schedule under the entered HA name."""
 
-    entity_description = ButtonEntityDescription(
+    entity_description = AristonButtonEntityDescription(
         key="SaveCurrentDhwScenario",
         name="Ariston save current DHW scenario",
         icon="mdi:content-save",
