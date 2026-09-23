@@ -12,6 +12,7 @@ from homeassistant.helpers.entity import EntityCategory
 from .const import COORDINATOR, DOMAIN
 from .coordinator import DeviceDataUpdateCoordinator
 from .dhw_scenarios import DHW_SCENARIO_MANAGER
+from .heating_scenarios import HEATING_SCENARIO_MANAGERS
 from .entity import AristonEntity
 
 
@@ -25,14 +26,27 @@ class AristonTextEntityDescription(TextEntityDescription):
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities
 ) -> None:
-    """Set up the DHW scenario-name text entity."""
+    """Set up DHW and heating scenario-name text entities."""
     data = hass.data[DOMAIN][entry.unique_id]
     coordinator: DeviceDataUpdateCoordinator = data[COORDINATOR]
-    manager = data.get(DHW_SCENARIO_MANAGER)
-    if manager is None:
-        return
+    entities = []
 
-    async_add_entities([AristonDhwScenarioName(coordinator, manager)])
+    manager = data.get(DHW_SCENARIO_MANAGER)
+    if manager is not None:
+        entities.append(AristonDhwScenarioName(coordinator, manager))
+
+    for zone, heating_manager in data.get(
+        HEATING_SCENARIO_MANAGERS, {}
+    ).items():
+        entities.append(
+            AristonHeatingScenarioName(
+                coordinator,
+                heating_manager,
+                zone,
+            )
+        )
+
+    async_add_entities(entities)
 
 
 class AristonDhwScenarioName(AristonEntity, TextEntity):
@@ -58,5 +72,32 @@ class AristonDhwScenarioName(AristonEntity, TextEntity):
 
     async def async_set_value(self, value: str) -> None:
         """Save the current Ariston DHW schedule under the entered name."""
+        await self.manager.async_save_current(value)
+        self.async_write_ha_state()
+
+
+class AristonHeatingScenarioName(AristonEntity, TextEntity):
+    """Name entered by the user for the currently loaded heating schedule."""
+
+    _attr_native_max = 100
+    _attr_mode = TextMode.TEXT
+
+    def __init__(self, coordinator, manager, zone: int) -> None:
+        description = AristonTextEntityDescription(
+            key=f"HeatingScenarioNameZone{zone}",
+            name=f"Ariston heating scenario name zone {zone}",
+            icon="mdi:form-textbox",
+            entity_category=EntityCategory.CONFIG,
+        )
+        super().__init__(coordinator, description, zone)
+        self.manager = manager
+
+    @property
+    def native_value(self) -> str:
+        """Return the current draft name."""
+        return self.manager.draft_name
+
+    async def async_set_value(self, value: str) -> None:
+        """Save the current heating schedule under the entered name."""
         await self.manager.async_save_current(value)
         self.async_write_ha_state()
