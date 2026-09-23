@@ -1,0 +1,355 @@
+"""Home Assistant-managed heating scenario names and schedules."""
+
+from __future__ import annotations
+
+from copy import deepcopy
+import logging
+
+from ariston.const import ZoneMode
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
+
+from .const import DHW_SCENARIOS, DOMAIN
+from .coordinator import DeviceDataUpdateCoordinator
+
+_LOGGER = logging.getLogger(__name__)
+
+HEATING_SCENARIO_MANAGERS = "heating_scenario_managers"
+_STORAGE_VERSION = 1
+
+# Ariston's mobile app uses the same logical Comfort/Economy weekly-plan
+# templates for heating zones.  User-defined names are learned directly in HA.
+HEATING_STANDARD_SCENARIOS = {
+    "Всегда включен": DHW_SCENARIOS["Всегда Comfort"],
+    "Семья дома": DHW_SCENARIOS["Семья"],
+    "Полуденный": DHW_SCENARIOS["Дома днём"],
+    "Без обеденного перерыва": DHW_SCENARIOS["Без обеда"],
+}
+
+
+def _plan_signature(plan):
+    """Return a stable signature for comparing weekly heating plans."""
+    if not isinstance(plan, dict):
+        return None
+
+    normalized = []
+    for day_plan in plan.get("plans", []):
+        days = tuple(sorted(day_plan.get("days", [])))
+        slices = tuple(
+            (item.get("from", 0), item.get("temp"))
+            for item in day_plan.get("slices", [])
+        )
+        normalized.append((days, slices))
+
+    return tuple(sorted(normalized)) if normalized else None
+
+
+def extract_heating_plan(program_data, zone: int):
+    """Extract the ChZn weekly-plan object from an Ariston API response."""
+    if not isinstance(program_data, dict):
+        return None
+
+    if isinstance(program_data.get("plans"), list):
+        return program_data
+
+    for key in (
+        f"ChZn{zone}",
+        f"chZn{zone}",
+        f"CHZn{zone}",
+        f"Zone{zone}",
+        f"zone{zone}",
+    ):
+        value = program_data.get(key)
+        if isinstance(value, dict) and isinstance(value.get("plans"), list):
+            return value
+
+    # Be tolerant of one extra API wrapper level.
+    for value in program_data.values():
+        if isinstance(value, dict):
+            nested = extract_heating_plan(value, zone)
+            if nested is not None:
+                return nested
+
+    return None
+
+
+def _selected_schedule_temp(plan):
+    """Return the active schedule temp marker/value for the current local time."""
+    if not isinstance(plan, dict):
+        return None
+
+    plans = plan.get("plans", [])
+    if not plans:
+        return None
+
+    now = dt_util.now()
+
+    # Ariston: Sunday=0, Monday=1, ... Saturday=6.
+    ariston_day = (now.weekday() + 1) % 7
+    minutes_now = now.hour * 60 + now.minute
+    selected_temp = plan.get("defaultTemp", 0)
+
+    for day_plan in plans:
+        if ariston_day not in day_plan.get("days", []):
+            continue
+
+        for time_slice in sorted(
+            day_plan.get("slices", []),
+            key=lambda item: item.get("from", 0),
+        ):
+            if time_slice.get("from", 0) <= minutes_now:
+                selected_temp = time_slice.get("temp", selected_temp)
+            else:
+                break
+        break
+
+    return selected_temp
+
+
+class HeatingScenarioManager:
+    """Persist and apply named heating schedules for one Ariston zone."""
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        coordinator: DeviceDataUpdateCoordinator,
+        zone: int,
+    ) -> None:
+        self.hass = hass
+        self.entry = entry
+        self.coordinator = coordinator
+        self.device = coordinator.device
+        self.zone = zone
+        self.store = Store(
+            hass,
+            _STORAGE_VERSION,
+            f"{DOMAIN}.heating_scenarios.{entry.entry_id}.zone_{zone}",
+        )
+        self.custom_scenarios: dict[str, dict] = {}
+        self.draft_name = ""
+
+    async def async_load(self) -> None:
+        """Load HA-defined scenario names and schedules."""
+        data = await self.store.async_load() or {}
+        scenarios = data.get("scenarios", {})
+        if isinstance(scenarios, dict):
+            self.custom_scenarios = {
+                str(name): scenario
+                for name, scenario in scenarios.items()
+                if isinstance(name, str) and isinstance(scenario, dict)
+            }
+
+        current = self.current_name
+        if current and current in self.custom_scenarios:
+            self.draft_name = current
+
+    @property
+    def raw_program(self):
+        """Return the raw API response last read for this heating zone."""
+        programs = getattr(self.device, "heating_time_programs", {}) or {}
+        return programs.get(self.zone)
+
+    @property
+    def current_plan(self):
+        """Return the normalized weekly-plan object for this zone."""
+        return extract_heating_plan(self.raw_program, self.zone)
+
+    @property
+    def options(self) -> list[str]:
+        """Return built-in and HA-defined heating scenario names."""
+        return list(HEATING_STANDARD_SCENARIOS) + [
+            name
+            for name in self.custom_scenarios
+            if name not in HEATING_STANDARD_SCENARIOS
+        ]
+
+    @property
+    def current_name(self) -> str | None:
+        """Return the name whose stored schedule matches the current cloud plan."""
+        current_signature = _plan_signature(self.current_plan)
+        if current_signature is None:
+            return None
+
+        for name, scenario in HEATING_STANDARD_SCENARIOS.items():
+            if current_signature == _plan_signature(scenario):
+                return name
+
+        for name, scenario in self.custom_scenarios.items():
+            if current_signature == _plan_signature(scenario):
+                return name
+
+        return None
+
+    @property
+    def active_program(self) -> str | None:
+        """Return Manual, Comfort, Economy, or the active numeric schedule value."""
+        if not self.device.is_zone_in_time_program_mode(self.zone):
+            return "Manual"
+
+        selected_temp = _selected_schedule_temp(self.current_plan)
+        if selected_temp is None:
+            return None
+
+        # Most GALEVO schedules use 0/1 as Economy/Comfort selectors.
+        if selected_temp in (0, 0.0):
+            return "Economy"
+        if selected_temp in (1, 1.0):
+            return "Comfort"
+
+        # Some variants may expose the actual scheduled temperature.
+        try:
+            value = float(selected_temp)
+            comfort = self.device.get_comfort_temp_value(self.zone)
+            economy = self.device.get_zone_economy_temp_value(self.zone)
+
+            if comfort is not None and abs(value - float(comfort)) < 0.01:
+                return "Comfort"
+            if economy is not None and abs(value - float(economy)) < 0.01:
+                return "Economy"
+
+            return f"{value:g} °C"
+        except (TypeError, ValueError):
+            return str(selected_temp)
+
+    @property
+    def active_target_temperature(self):
+        """Return the effective heating target for the current schedule slot."""
+        if not self.device.is_zone_in_time_program_mode(self.zone):
+            return self.device.get_target_temp_value(self.zone)
+
+        selected_temp = _selected_schedule_temp(self.current_plan)
+        if selected_temp is None:
+            return self.device.get_target_temp_value(self.zone)
+
+        if selected_temp in (0, 0.0):
+            return self.device.get_zone_economy_temp_value(self.zone)
+        if selected_temp in (1, 1.0):
+            return self.device.get_comfort_temp_value(self.zone)
+
+        try:
+            return float(selected_temp)
+        except (TypeError, ValueError):
+            return self.device.get_target_temp_value(self.zone)
+
+    def _build_url(self) -> str:
+        api = self.device.api
+        base_url = getattr(api, "_AristonAPI__api_url", None)
+        if not base_url:
+            raise RuntimeError("Ariston API base URL unavailable")
+
+        umsys = getattr(self.device, "umsys", None)
+        if umsys is None:
+            umsys = getattr(self.device, "_umsys", None)
+        suffix = f"?umsys={umsys}" if umsys is not None else ""
+
+        return (
+            f"{base_url}remote/timeProgs/{self.device.gw}/"
+            f"ChZn{self.zone}{suffix}"
+        )
+
+    async def async_save_current(self, name: str) -> None:
+        """Save the current cloud heating schedule under a user-supplied name."""
+        name = (name or "").strip()
+        if not name:
+            raise ValueError("Heating scenario name must not be empty")
+        if name in HEATING_STANDARD_SCENARIOS:
+            raise ValueError(
+                f"'{name}' is a built-in heating scenario name; choose another name"
+            )
+
+        current = self.current_plan
+        if not isinstance(current, dict) or not current.get("plans"):
+            raise RuntimeError(
+                f"Current Ariston heating schedule for zone {self.zone} is unavailable"
+            )
+
+        # Store only the schedule object. No credentials, gateway id or account
+        # data are persisted in this Home Assistant mapping.
+        self.custom_scenarios[name] = deepcopy(current)
+        self.draft_name = name
+        await self.store.async_save({"scenarios": self.custom_scenarios})
+
+        _LOGGER.info(
+            "Saved current Ariston heating zone %s schedule as '%s'",
+            self.zone,
+            name,
+        )
+        self.coordinator.async_set_updated_data(self.coordinator.data)
+
+    async def async_apply(self, name: str) -> None:
+        """Apply a standard or HA-defined heating scenario through API v2."""
+        scenario = HEATING_STANDARD_SCENARIOS.get(name)
+        if scenario is None:
+            scenario = self.custom_scenarios.get(name)
+        if scenario is None:
+            raise ValueError(f"Unknown heating scenario: {name}")
+
+        # For standard scenarios preserve metadata returned by this installation
+        # and replace only the actual weekly slices.  Custom scenarios already
+        # contain the exact payload previously read from this plant.
+        if name in HEATING_STANDARD_SCENARIOS:
+            current = self.current_plan or {}
+            weekly_plan = deepcopy(current)
+            weekly_plan["plans"] = deepcopy(scenario["plans"])
+            weekly_plan.setdefault("ext", False)
+            weekly_plan.setdefault("allowedTemp", [0, 1])
+            weekly_plan.setdefault("defaultTemp", 0)
+            weekly_plan.setdefault("baseTemp", 0)
+            weekly_plan.setdefault("tick", 0)
+            weekly_plan.setdefault("maxSwitches", 0)
+            weekly_plan.setdefault("pilot", None)
+        else:
+            weekly_plan = deepcopy(scenario)
+
+        url = self._build_url()
+        await self.device.api._async_post(url, weekly_plan)
+
+        new_program = await self.device.api._async_get(url)
+        new_plan = extract_heating_plan(new_program, self.zone)
+        if new_plan is None:
+            raise RuntimeError(
+                f"Ariston did not return heating zone {self.zone} program after write"
+            )
+
+        programs = getattr(self.device, "heating_time_programs", None)
+        if not isinstance(programs, dict):
+            programs = {}
+            self.device.heating_time_programs = programs
+        programs[self.zone] = new_program
+
+        # Selecting a heating scenario should also put the zone into time-program
+        # mode, matching what the mobile app does when a schedule is applied.
+        if (
+            self.device.is_zone_mode_options_contains_time_program(self.zone)
+            and not self.device.is_zone_in_time_program_mode(self.zone)
+        ):
+            await self.device.async_set_zone_mode(ZoneMode.TIME_PROGRAM, self.zone)
+
+        self.draft_name = name if name in self.custom_scenarios else ""
+        await self.coordinator.async_request_refresh()
+
+
+async def async_setup_heating_scenario_managers(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    coordinator: DeviceDataUpdateCoordinator,
+) -> dict[int, HeatingScenarioManager]:
+    """Create and load a manager for every reported heating zone."""
+    entry_data = hass.data[DOMAIN][entry.unique_id]
+    managers = entry_data.get(HEATING_SCENARIO_MANAGERS)
+    if isinstance(managers, dict):
+        return managers
+
+    managers = {}
+    for zone in coordinator.device.zone_numbers:
+        if not zone:
+            continue
+        manager = HeatingScenarioManager(hass, entry, coordinator, zone)
+        await manager.async_load()
+        managers[zone] = manager
+
+    entry_data[HEATING_SCENARIO_MANAGERS] = managers
+    return managers
