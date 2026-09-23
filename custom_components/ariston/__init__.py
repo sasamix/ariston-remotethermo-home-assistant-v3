@@ -49,6 +49,7 @@ from .const import (
 )
 from .coordinator import DeviceDataUpdateCoordinator
 from .dhw_scenarios import async_setup_dhw_scenario_manager
+from .heating_scenarios import async_setup_heating_scenario_managers
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -143,10 +144,58 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     err,
                 )
 
-        async def async_update_state_with_dhw_program():
-            """Update Ariston state and DHW time program."""
+        async def async_update_heating_programs(notify=False):
+            """Update all reported heating-zone time programs."""
+            if device.system_type != SystemType.GALEVO:
+                return
+
+            changed = False
+            programs = getattr(device, "heating_time_programs", None)
+            if not isinstance(programs, dict):
+                programs = {}
+                device.heating_time_programs = programs
+
+            try:
+                api = device.api
+                base_url = getattr(api, "_AristonAPI__api_url", None)
+                if not base_url:
+                    return
+
+                umsys = getattr(device, "umsys", None)
+                if umsys is None:
+                    umsys = getattr(device, "_umsys", None)
+                suffix = f"?umsys={umsys}" if umsys is not None else ""
+
+                for zone in device.zone_numbers:
+                    if not zone:
+                        continue
+
+                    url = (
+                        f"{base_url}remote/timeProgs/{device.gw}/"
+                        f"ChZn{zone}{suffix}"
+                    )
+                    new_program = await api._async_get(url)
+                    if new_program is None:
+                        continue
+
+                    if new_program != programs.get(zone):
+                        changed = True
+                    programs[zone] = new_program
+
+                if changed and notify:
+                    coordinator.async_set_updated_data(coordinator.data)
+
+            except Exception as err:
+                _LOGGER.warning(
+                    "Unable to update Ariston heating time programs: %r",
+                    err,
+                )
+
+        async def async_update_state_with_time_programs():
+            """Update Ariston state plus DHW and heating weekly programs."""
             result = await original_async_update_state()
             await async_update_dhw_program()
+            await async_update_heating_programs()
             return result
 
         scan_interval_seconds = entry.options.get(
@@ -157,7 +206,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             device,
             scan_interval_seconds,
             COORDINATOR,
-            async_update_state_with_dhw_program,
+            async_update_state_with_time_programs,
         )
 
         hass.data.setdefault(DOMAIN, {}).setdefault(
@@ -171,16 +220,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # mobile app, so HA stores only the local name -> schedule mapping.
         if device.system_type == SystemType.GALEVO:
             await async_setup_dhw_scenario_manager(hass, entry, coordinator)
+            await async_setup_heating_scenario_managers(hass, entry, coordinator)
 
-        # Refresh only the lightweight DHW schedule every 30 seconds.
+        # Refresh the lightweight DHW and heating schedules every 30 seconds
+        # without increasing the normal device-state polling rate.
         if device.system_type == SystemType.GALEVO:
-            async def async_dhw_program_timer(_now):
+            async def async_time_program_timer(_now):
                 await async_update_dhw_program(notify=True)
+                await async_update_heating_programs(notify=True)
 
             entry.async_on_unload(
                 async_track_time_interval(
                     hass,
-                    async_dhw_program_timer,
+                    async_time_program_timer,
                     timedelta(seconds=30),
                 )
             )
