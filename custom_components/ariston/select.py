@@ -2,18 +2,28 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
 
-from homeassistant.components.select import SelectEntity
+from homeassistant.components.select import SelectEntity, SelectEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import EntityCategory
 
 from .const import ARISTON_SELECT_TYPES, DOMAIN, AristonSelectEntityDescription
 from .coordinator import DeviceDataUpdateCoordinator
 from .dhw_scenarios import DHW_SCENARIO_MANAGER
+from .heating_scenarios import HEATING_SCENARIO_MANAGERS
 from .entity import AristonEntity
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(kw_only=True, frozen=True)
+class AristonHeatingSelectEntityDescription(SelectEntityDescription):
+    """Select description compatible with AristonEntity."""
+
+    extra_states: list | None = None
 
 
 async def async_setup_entry(
@@ -46,7 +56,47 @@ async def async_setup_entry(
                 )
             )
 
+    heating_managers = hass.data[DOMAIN][entry.unique_id].get(
+        HEATING_SCENARIO_MANAGERS, {}
+    )
+    for zone, manager in heating_managers.items():
+        coordinator: DeviceDataUpdateCoordinator = hass.data[DOMAIN][entry.unique_id][
+            "coordinator"
+        ]
+        ariston_select.append(
+            AristonHeatingScenarioSelect(coordinator, manager, zone)
+        )
+
     async_add_entities(ariston_select)
+
+
+class AristonHeatingScenarioSelect(AristonEntity, SelectEntity):
+    """Per-zone heating scenario selector."""
+
+    def __init__(self, coordinator, manager, zone: int) -> None:
+        description = AristonHeatingSelectEntityDescription(
+            key=f"HeatingScenarioZone{zone}",
+            name=f"Ariston heating scenario zone {zone}",
+            icon="mdi:radiator",
+            entity_category=EntityCategory.CONFIG,
+        )
+        super().__init__(coordinator, description, zone)
+        self.manager = manager
+
+    @property
+    def current_option(self):
+        """Return the schedule name matching the current heating program."""
+        return self.manager.current_name
+
+    @property
+    def options(self):
+        """Return standard and Home Assistant-defined heating scenarios."""
+        return self.manager.options
+
+    async def async_select_option(self, option: str):
+        """Apply the selected heating scenario."""
+        await self.manager.async_apply(option)
+        self.async_write_ha_state()
 
 
 class AristonSelect(AristonEntity, SelectEntity):
