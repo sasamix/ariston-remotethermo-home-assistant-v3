@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 import logging
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorEntityDescription,
+    SensorStateClass,
+)
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfVolume
+from homeassistant.const import UnitOfTemperature, UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -20,8 +26,16 @@ from .const import (
 )
 from .coordinator import DeviceDataUpdateCoordinator
 from .entity import AristonEntity
+from .heating_scenarios import HEATING_SCENARIO_MANAGERS
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(kw_only=True, frozen=True)
+class AristonHeatingSensorEntityDescription(SensorEntityDescription):
+    """Sensor description compatible with AristonEntity."""
+
+    extra_states: list | None = None
 
 
 async def async_setup_entry(
@@ -49,6 +63,53 @@ async def async_setup_entry(
                     description,
                 )
             )
+
+    heating_managers = hass.data[DOMAIN][entry.unique_id].get(
+        HEATING_SCENARIO_MANAGERS, {}
+    )
+    for zone, manager in heating_managers.items():
+        coordinator: DeviceDataUpdateCoordinator = hass.data[DOMAIN][entry.unique_id][
+            "coordinator"
+        ]
+        ariston_sensors.extend(
+            [
+                AristonHeatingZoneSensor(
+                    coordinator,
+                    manager,
+                    zone,
+                    "active_program",
+                    f"Ariston heating active program zone {zone}",
+                    "mdi:radiator",
+                ),
+                AristonHeatingZoneSensor(
+                    coordinator,
+                    manager,
+                    zone,
+                    "active_target",
+                    f"Ariston heating active target temperature zone {zone}",
+                    "mdi:thermometer-check",
+                    temperature=True,
+                ),
+                AristonHeatingZoneSensor(
+                    coordinator,
+                    manager,
+                    zone,
+                    "comfort",
+                    f"Ariston heating comfort temperature zone {zone}",
+                    "mdi:thermometer-chevron-up",
+                    temperature=True,
+                ),
+                AristonHeatingZoneSensor(
+                    coordinator,
+                    manager,
+                    zone,
+                    "economy",
+                    f"Ariston heating economy temperature zone {zone}",
+                    "mdi:thermometer-chevron-down",
+                    temperature=True,
+                ),
+            ]
+        )
 
     async_add_entities(ariston_sensors)
 
@@ -90,6 +151,46 @@ async def async_setup_entry(
             ]
         )
 
+
+
+class AristonHeatingZoneSensor(AristonEntity, SensorEntity):
+    """Per-zone heating schedule/status sensor."""
+
+    def __init__(
+        self,
+        coordinator,
+        manager,
+        zone: int,
+        kind: str,
+        name: str,
+        icon: str,
+        temperature: bool = False,
+    ) -> None:
+        description = AristonHeatingSensorEntityDescription(
+            key=f"Heating{kind.title().replace('_', '')}Zone{zone}",
+            name=name,
+            icon=icon,
+            device_class=SensorDeviceClass.TEMPERATURE if temperature else None,
+            native_unit_of_measurement=(
+                UnitOfTemperature.CELSIUS if temperature else None
+            ),
+        )
+        super().__init__(coordinator, description, zone)
+        self.manager = manager
+        self.kind = kind
+
+    @property
+    def native_value(self):
+        """Return the requested heating-zone value."""
+        if self.kind == "active_program":
+            return self.manager.active_program
+        if self.kind == "active_target":
+            return self.manager.active_target_temperature
+        if self.kind == "comfort":
+            return self.device.get_comfort_temp_value(self.zone)
+        if self.kind == "economy":
+            return self.device.get_zone_economy_temp_value(self.zone)
+        return None
 
 
 class AristonGasEnergySensor(CoordinatorEntity, SensorEntity):
