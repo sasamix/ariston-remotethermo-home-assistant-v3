@@ -171,6 +171,7 @@ class AristonHeatingZoneSensor(AristonEntity, SensorEntity):
             name=name,
             icon=icon,
             device_class=SensorDeviceClass.TEMPERATURE if temperature else None,
+            state_class=SensorStateClass.MEASUREMENT if temperature else None,
             native_unit_of_measurement=(
                 UnitOfTemperature.CELSIUS if temperature else None
             ),
