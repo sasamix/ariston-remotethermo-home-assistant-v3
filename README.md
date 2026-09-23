@@ -78,3 +78,27 @@ For GALEVO systems the integration adds:
 
 Only the schedule payload and the user-supplied name are stored in Home Assistant.
 Credentials, gateway identifiers and account data are not stored in this scenario mapping.
+
+
+## Heating scenarios (GALEVO)
+
+The fork now manages heating-zone schedules in the same way as DHW schedules.
+For every heating zone reported by Ariston, Home Assistant gets:
+
+- `select.*ariston_heating_scenario_zone_N` — current/selected heating scenario.
+- `text.*ariston_heating_scenario_name_zone_N` — enter a name and submit it to save
+  the currently loaded Ariston weekly schedule under that name.
+- `button.*ariston_save_current_heating_scenario_zone_N` — optional explicit save action.
+- `sensor.*ariston_heating_active_program_zone_N` — current Comfort/Economy/Manual slot.
+- `sensor.*ariston_heating_active_target_temperature_zone_N` — effective target now.
+- `sensor.*ariston_heating_comfort_temperature_zone_N` — zone Comfort temperature.
+- `sensor.*ariston_heating_economy_temperature_zone_N` — zone Economy temperature.
+
+Heating schedules are refreshed independently every 30 seconds using the Ariston API v2
+`ChZnN` time-program resource. Standard schedules are recognized by their weekly-plan
+signature, while mobile-app user scenarios can be learned in HA by giving the currently
+loaded schedule a name. Selecting a scenario writes its complete weekly plan back to
+Ariston and switches the zone to time-program mode.
+
+Only scenario names and schedule payloads are persisted by this feature. Credentials,
+account data and gateway identifiers are not stored in the scenario mapping.
