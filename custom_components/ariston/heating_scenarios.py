@@ -185,7 +185,10 @@ class HeatingScenarioManager:
 
     @property
     def active_program(self) -> str | None:
-        """Return Manual, Comfort, Economy, or the active numeric schedule value."""
+        """Return Off, Manual, Comfort, Economy, or the active numeric value."""
+        zone_mode = self.device.get_zone_mode(self.zone)
+        if zone_mode == ZoneMode.OFF:
+            return "Off"
         if not self.device.is_zone_in_time_program_mode(self.zone):
             return "Manual"
 
