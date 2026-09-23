@@ -12,6 +12,7 @@ from homeassistant.helpers.entity import EntityCategory
 from .const import COORDINATOR, DOMAIN
 from .coordinator import DeviceDataUpdateCoordinator
 from .dhw_scenarios import DHW_SCENARIO_MANAGER
+from .heating_scenarios import HEATING_SCENARIO_MANAGERS
 from .entity import AristonEntity
 
 
@@ -25,14 +26,27 @@ class AristonButtonEntityDescription(ButtonEntityDescription):
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities
 ) -> None:
-    """Set up the save-current-DHW-scenario button."""
+    """Set up DHW and heating save-current-scenario buttons."""
     data = hass.data[DOMAIN][entry.unique_id]
     coordinator: DeviceDataUpdateCoordinator = data[COORDINATOR]
-    manager = data.get(DHW_SCENARIO_MANAGER)
-    if manager is None:
-        return
+    entities = []
 
-    async_add_entities([AristonSaveCurrentDhwScenario(coordinator, manager)])
+    manager = data.get(DHW_SCENARIO_MANAGER)
+    if manager is not None:
+        entities.append(AristonSaveCurrentDhwScenario(coordinator, manager))
+
+    for zone, heating_manager in data.get(
+        HEATING_SCENARIO_MANAGERS, {}
+    ).items():
+        entities.append(
+            AristonSaveCurrentHeatingScenario(
+                coordinator,
+                heating_manager,
+                zone,
+            )
+        )
+
+    async_add_entities(entities)
 
 
 class AristonSaveCurrentDhwScenario(AristonEntity, ButtonEntity):
@@ -51,4 +65,22 @@ class AristonSaveCurrentDhwScenario(AristonEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         """Save the current cloud schedule under the text entity's draft name."""
+        await self.manager.async_save_current(self.manager.draft_name)
+
+
+class AristonSaveCurrentHeatingScenario(AristonEntity, ButtonEntity):
+    """Save the current heating-zone schedule under the entered HA name."""
+
+    def __init__(self, coordinator, manager, zone: int) -> None:
+        description = AristonButtonEntityDescription(
+            key=f"SaveCurrentHeatingScenarioZone{zone}",
+            name=f"Ariston save current heating scenario zone {zone}",
+            icon="mdi:content-save",
+            entity_category=EntityCategory.CONFIG,
+        )
+        super().__init__(coordinator, description, zone)
+        self.manager = manager
+
+    async def async_press(self) -> None:
+        """Save the current heating schedule under the text entity draft."""
         await self.manager.async_save_current(self.manager.draft_name)
