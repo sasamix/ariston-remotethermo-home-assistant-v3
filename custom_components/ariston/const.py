@@ -1349,7 +1349,7 @@ ARISTON_SWITCH_TYPES: list[AristonSwitchEntityDescription] = [
 ARISTON_NUMBER_TYPES: list[AristonNumberEntityDescription] = [
     AristonNumberEntityDescription(
         key=ConsumptionProperties.ELEC_COST,
-        name=f"{NAME} elec cost",
+        name=f"{NAME} Energy electricity cost",
         icon="mdi:currency-sign",
         entity_category=EntityCategory.CONFIG,
         native_min_value=0,
