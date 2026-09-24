@@ -256,7 +256,7 @@
     },
     "select": {
       "dhw_scenario": {
-        "name": "Ariston ГВС — сценарий",
+        "name": "ГВС — выбор сценария",
         "state": {
           "Всегда Comfort": "Всегда комфорт",
           "Семья": "Семья",
@@ -298,7 +298,7 @@
         "name": "Ariston режим работы"
       },
       "heating_scenario": {
-        "name": "Ariston отопление — сценарий зоны {zone}",
+        "name": "Отопление {zone} — выбор сценария",
         "state": {
           "Всегда включен": "Всегда включено",
           "Семья дома": "Семья дома",
@@ -309,18 +309,18 @@
     },
     "text": {
       "dhw_scenario_name": {
-        "name": "Ariston ГВС — название сценария"
+        "name": "ГВС — имя сценария"
       },
       "heating_scenario_name": {
-        "name": "Ariston отопление — название сценария зоны {zone}"
+        "name": "Отопление {zone} — имя сценария"
       }
     },
     "button": {
       "dhw_scenario_save": {
-        "name": "Ariston ГВС — сохранить сценарий"
+        "name": "ГВС — сохранить сценарий"
       },
       "heating_scenario_save": {
-        "name": "Ariston отопление — сохранить сценарий зоны {zone}"
+        "name": "Отопление {zone} — сохранить сценарий"
       }
     }
   },

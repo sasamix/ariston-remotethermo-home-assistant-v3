@@ -122,6 +122,7 @@ class DhwScenarioManager:
         )
         self.custom_scenarios: dict[str, dict] = {}
         self.draft_name = ""
+        self._selected_name: str | None = None
 
     async def async_load(self) -> None:
         """Load user-defined DHW scenarios from Home Assistant storage."""
@@ -133,9 +134,10 @@ class DhwScenarioManager:
                 for name, scenario in scenarios.items()
                 if isinstance(name, str) and isinstance(scenario, dict)
             }
+        self._selected_name = data.get("selected")
 
         current = self.current_name
-        if current and current in self.custom_scenarios:
+        if current:
             self.draft_name = current
 
     @property
@@ -179,13 +181,25 @@ class DhwScenarioManager:
         if current_signature is None:
             return None
 
-        for name, scenario in DHW_SCENARIOS.items():
-            if current_signature == _plan_signature(scenario):
-                return self._localized_builtin_name(name)
+        selected = self._selected_name
+        selected_builtin = self._canonical_builtin_name(selected) if selected else None
+        selected_plan = (
+            DHW_SCENARIOS.get(selected_builtin)
+            if selected_builtin is not None
+            else self.custom_scenarios.get(selected)
+        )
+        if selected_plan is not None and current_signature == _plan_signature(selected_plan):
+            return self._localized_builtin_name(selected_builtin) if selected_builtin else selected
 
+        # Custom plans can share the same schedule as a built-in. Prefer the
+        # user's saved name when no explicit selection is known.
         for name, scenario in self.custom_scenarios.items():
             if current_signature == _plan_signature(scenario):
                 return name
+
+        for name, scenario in DHW_SCENARIOS.items():
+            if current_signature == _plan_signature(scenario):
+                return self._localized_builtin_name(name)
 
         return None
 
@@ -218,8 +232,9 @@ class DhwScenarioManager:
         }
 
         self.custom_scenarios[name] = saved
+        self._selected_name = name
         self.draft_name = name
-        await self.store.async_save({"scenarios": self.custom_scenarios})
+        await self.store.async_save({"scenarios": self.custom_scenarios, "selected": name})
 
         _LOGGER.info("Saved current Ariston DHW schedule as '%s'", name)
         self.coordinator.async_set_updated_data(self.coordinator.data)
@@ -265,7 +280,12 @@ class DhwScenarioManager:
             raise RuntimeError("Ariston did not return the DHW program after write")
 
         self.device.dhw_time_program = new_program
-        self.draft_name = name if name in self.custom_scenarios else ""
+        self._selected_name = canonical_name or name
+        self.draft_name = name
+        await self.store.async_save({
+            "scenarios": self.custom_scenarios,
+            "selected": self._selected_name,
+        })
         self.coordinator.async_set_updated_data(self.coordinator.data)
 
 

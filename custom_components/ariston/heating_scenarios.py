@@ -211,6 +211,7 @@ class HeatingScenarioManager:
         )
         self.custom_scenarios: dict[str, dict] = {}
         self.draft_name = ""
+        self._selected_name: str | None = None
 
     async def async_load(self) -> None:
         """Load HA-defined scenario names and schedules."""
@@ -222,6 +223,7 @@ class HeatingScenarioManager:
                 for name, scenario in scenarios.items()
                 if isinstance(name, str) and isinstance(scenario, dict)
             }
+        self._selected_name = data.get("selected")
 
         current = self.current_name
         if current:
@@ -280,13 +282,23 @@ class HeatingScenarioManager:
         if current_signature is None:
             return None
 
-        for name, scenario in HEATING_STANDARD_SCENARIOS.items():
-            if current_signature == _plan_signature(scenario):
-                return self._localized_builtin_name(name)
+        selected = self._selected_name
+        selected_builtin = self._canonical_builtin_name(selected) if selected else None
+        selected_plan = (
+            HEATING_STANDARD_SCENARIOS.get(selected_builtin)
+            if selected_builtin is not None
+            else self.custom_scenarios.get(selected)
+        )
+        if selected_plan is not None and current_signature == _plan_signature(selected_plan):
+            return self._localized_builtin_name(selected_builtin) if selected_builtin else selected
 
         for name, scenario in self.custom_scenarios.items():
             if current_signature == _plan_signature(scenario):
                 return name
+
+        for name, scenario in HEATING_STANDARD_SCENARIOS.items():
+            if current_signature == _plan_signature(scenario):
+                return self._localized_builtin_name(name)
 
         return None
 
@@ -379,8 +391,9 @@ class HeatingScenarioManager:
         # Store only the schedule object. No credentials, gateway id or account
         # data are persisted in this Home Assistant mapping.
         self.custom_scenarios[name] = deepcopy(current)
+        self._selected_name = name
         self.draft_name = name
-        await self.store.async_save({"scenarios": self.custom_scenarios})
+        await self.store.async_save({"scenarios": self.custom_scenarios, "selected": name})
 
         _LOGGER.info(
             "Saved current Ariston heating zone %s schedule as '%s'",
@@ -434,6 +447,11 @@ class HeatingScenarioManager:
             programs = {}
             self.device.heating_time_programs = programs
         programs[self.zone] = new_program
+        self._selected_name = canonical_name or name
+        await self.store.async_save({
+            "scenarios": self.custom_scenarios,
+            "selected": self._selected_name,
+        })
 
         # Selecting a heating scenario should also put the zone into time-program
         # mode, matching what the mobile app does when a schedule is applied.
