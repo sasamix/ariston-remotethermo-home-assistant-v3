@@ -29,8 +29,8 @@ _LEGACY_UNIQUE_ID_NAMES = {
     ConsumptionProperties.GAS_COST: "Ariston gas cost",
     ConsumptionProperties.GAS_TYPE: "Ariston gas type",
     ConsumptionProperties.GAS_ENERGY_UNIT: "Ariston gas energy unit",
-    ThermostatProperties.HEATING_FLOW_TEMP: "Ariston System heating flow temperature",
-    ThermostatProperties.HEATING_FLOW_OFFSET: "Ariston System heating flow offset",
+    ThermostatProperties.HEATING_FLOW_TEMP: "Ariston heating flow temperature",
+    ThermostatProperties.HEATING_FLOW_OFFSET: "Ariston heating flow offset",
 }
 
 
@@ -123,9 +123,16 @@ class AristonEntity(CoordinatorEntity, ABC):
         if unique_name is None:
             unique_name = self.name
 
-        # NumberEntity.name included the zone before unique_id appended it
-        # again. Keep both suffixes for existing entity registry entries.
-        if self.zone and getattr(self.entity_description, "zone", False):
+        # These two controls use the original single-zone registry IDs. Other
+        # zoned Number entities include the zone in the name and again here.
+        if (
+            self.zone
+            and getattr(self.entity_description, "zone", False)
+            and self.entity_description.key not in (
+                ThermostatProperties.HEATING_FLOW_TEMP,
+                ThermostatProperties.HEATING_FLOW_OFFSET,
+            )
+        ):
             unique_name = f"{unique_name} {self.zone}"
 
         return (
