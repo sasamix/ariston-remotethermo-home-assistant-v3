@@ -80,6 +80,8 @@ class AristonSaveCurrentHeatingScenario(AristonEntity, ButtonEntity):
         description = AristonButtonEntityDescription(
             key=f"SaveCurrentHeatingScenarioZone{zone}",
             name=f"Ariston CH scenario zone {zone} save",
+            translation_key="heating_scenario_save",
+            translation_placeholders={"zone": str(zone)},
             icon="mdi:content-save",
             entity_category=EntityCategory.CONFIG,
         )
