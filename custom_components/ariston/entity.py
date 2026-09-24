@@ -16,6 +16,7 @@ from .const import (
     AristonBaseEntityDescription,
 )
 from .coordinator import DeviceDataUpdateCoordinator
+from .localization import get_entity_translation_key
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -93,12 +94,39 @@ class AristonEntity(CoordinatorEntity, ABC):
         return state_attributes
 
     @property
+    def translation_key(self) -> str | None:
+        """Return the Home Assistant translation key for this entity."""
+        description_key = getattr(self.entity_description, "translation_key", None)
+        if description_key:
+            return description_key
+        return get_entity_translation_key(getattr(self.entity_description, "name", None))
+
+    @property
+    def has_entity_name(self) -> bool:
+        """Use Home Assistant's entity localization whenever a key is available."""
+        return self.translation_key is not None
+
+    @property
     def unique_id(self):
-        """Return the unique id."""
+        """Return the legacy-stable unique id.
+
+        Older versions built unique IDs from the English/fallback entity name.
+        Localizing a display name must never create a new entity or detach
+        Recorder history, so the translated name is deliberately not used here.
+        """
         unique_name = _LEGACY_UNIQUE_ID_NAMES.get(
             self.entity_description.key,
-            self.name,
+            getattr(self.entity_description, "name", None),
         )
+
+        if unique_name is None:
+            unique_name = self.name
+
+        # Zoned Number entities historically appended the zone in their name
+        # and AristonEntity appended the zone once more to the unique ID.
+        if self.zone and getattr(self.entity_description, "zone", False):
+            unique_name = f"{unique_name} {self.zone}"
+
         return (
             f"{self.device.gateway}-{unique_name}-{self.zone}"
             if self.zone
