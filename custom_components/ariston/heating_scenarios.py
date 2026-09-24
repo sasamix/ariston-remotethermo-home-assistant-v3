@@ -99,12 +99,23 @@ def _plan_signature(plan):
 
 
 def extract_heating_plan(program_data, zone: int):
-    """Extract the ChZn weekly-plan object from an Ariston API response."""
+    """Extract the ChZn weekly-plan object from any known Ariston response shape."""
+    if isinstance(program_data, list):
+        for item in program_data:
+            nested = extract_heating_plan(item, zone)
+            if nested is not None:
+                return nested
+        return None
+
     if not isinstance(program_data, dict):
         return None
 
     if isinstance(program_data.get("plans"), list):
         return program_data
+
+    weekly_plan = program_data.get("weeklyPlan")
+    if isinstance(weekly_plan, dict) and isinstance(weekly_plan.get("plans"), list):
+        return weekly_plan
 
     for key in (
         f"ChZn{zone}",
@@ -114,12 +125,15 @@ def extract_heating_plan(program_data, zone: int):
         f"zone{zone}",
     ):
         value = program_data.get(key)
-        if isinstance(value, dict) and isinstance(value.get("plans"), list):
-            return value
+        nested = extract_heating_plan(value, zone)
+        if nested is not None:
+            return nested
 
-    # Be tolerant of one extra API wrapper level.
+    # Ariston has used both dict wrappers and list-based timeProgs responses
+    # across its API generations. Recurse through either so naming/saving does
+    # not depend on one exact JSON envelope.
     for value in program_data.values():
-        if isinstance(value, dict):
+        if isinstance(value, (dict, list)):
             nested = extract_heating_plan(value, zone)
             if nested is not None:
                 return nested
