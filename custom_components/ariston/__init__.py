@@ -556,25 +556,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 )
             )
 
-        # 0.20.1 incorrectly disabled the two existing System heating-flow
-        # numbers. Undo that migration before their platform is set up, while
-        # respecting any entries the user explicitly disabled.
-        registry = er.async_get(hass)
-        for zone in device.zone_numbers:
-            for label in ("temperature", "offset"):
-                unique_id = (
-                    f"{device.gateway}-Ariston System heating flow "
-                    f"{label} {zone}-{zone}"
-                )
-                entity_id = registry.async_get_entity_id("number", DOMAIN, unique_id)
-                registered = registry.async_get(entity_id) if entity_id else None
-                if (
-                    registered
-                    and registered.config_entry_id == entry.entry_id
-                    and registered.disabled_by == er.RegistryEntryDisabler.INTEGRATION
-                ):
-                    registry.async_update_entity(entity_id, disabled_by=None)
-
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
         entry.async_on_unload(entry.add_update_listener(update_listener))
