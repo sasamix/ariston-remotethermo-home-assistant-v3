@@ -256,7 +256,7 @@
     },
     "select": {
       "dhw_scenario": {
-        "name": "Ariston DHW scenario",
+        "name": "DHW — select scenario",
         "state": {
           "Всегда Comfort": "Always Comfort",
           "Семья": "Family",
@@ -298,7 +298,7 @@
         "name": "Ariston operation mode"
       },
       "heating_scenario": {
-        "name": "Ariston CH scenario zone {zone}",
+        "name": "Heating {zone} — select scenario",
         "state": {
           "Всегда включен": "Always on",
           "Семья дома": "Family home",
@@ -309,18 +309,18 @@
     },
     "text": {
       "dhw_scenario_name": {
-        "name": "Ariston DHW scenario name"
+        "name": "DHW — scenario name"
       },
       "heating_scenario_name": {
-        "name": "Ariston CH scenario zone {zone} name"
+        "name": "Heating {zone} — scenario name"
       }
     },
     "button": {
       "dhw_scenario_save": {
-        "name": "Ariston DHW scenario save"
+        "name": "DHW — save scenario"
       },
       "heating_scenario_save": {
-        "name": "Ariston CH scenario zone {zone} save"
+        "name": "Heating {zone} — save scenario"
       }
     }
   },

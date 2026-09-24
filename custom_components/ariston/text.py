@@ -77,8 +77,8 @@ class AristonDhwScenarioName(AristonEntity, TextEntity):
         return self.manager.draft_name
 
     async def async_set_value(self, value: str) -> None:
-        """Save the current Ariston DHW schedule under the entered name."""
-        await self.manager.async_save_current(value)
+        """Edit the name; the adjacent button explicitly saves the schedule."""
+        self.manager.draft_name = value
         self.async_write_ha_state()
 
 
@@ -110,10 +110,10 @@ class AristonHeatingScenarioName(AristonEntity, TextEntity):
 
     @property
     def native_value(self) -> str:
-        """Mirror the recognized heating scenario; keep draft for an unknown plan."""
-        return self.manager.current_name or self.manager.draft_name
+        """Show the user's draft, including edits to a recognized scenario."""
+        return self.manager.draft_name
 
     async def async_set_value(self, value: str) -> None:
-        """Save the current heating schedule under the entered name."""
-        await self.manager.async_save_current(value)
+        """Edit the name; the adjacent button explicitly saves the schedule."""
+        self.manager.draft_name = value
         self.async_write_ha_state()
