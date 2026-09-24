@@ -193,18 +193,65 @@ DHW_SCENARIOS = {
 
 
 def _dhw_plan_signature(plan):
-    """Return a stable signature for comparing DHW weekly plans."""
-    if not plan:
+    """Return a semantic per-day signature for comparing DHW weekly plans."""
+    if not isinstance(plan, dict):
         return None
-    normalized = []
-    for day_plan in plan.get("plans", []):
-        days = tuple(sorted(day_plan.get("days", [])))
-        slices = tuple(
-            (item.get("from", 0), item.get("temp", 0))
-            for item in day_plan.get("slices", [])
-        )
-        normalized.append((days, slices))
-    return tuple(sorted(normalized))
+
+    plans = plan.get("plans", [])
+    if not isinstance(plans, list) or not plans:
+        return None
+
+    def normalize_temp(value):
+        if value in (0, 0.0, "0"):
+            return 0
+        if value in (1, 1.0, "1"):
+            return 1
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return value
+
+    default_temp = normalize_temp(plan.get("defaultTemp", 0))
+    per_day = {}
+
+    for day_plan in plans:
+        if not isinstance(day_plan, dict):
+            continue
+
+        events = [(0, default_temp)]
+        for item in day_plan.get("slices", []):
+            if not isinstance(item, dict):
+                continue
+            try:
+                minute = int(item.get("from", 0))
+            except (TypeError, ValueError):
+                minute = 0
+            events.append(
+                (minute, normalize_temp(item.get("temp", default_temp)))
+            )
+
+        by_minute = {}
+        for minute, temp in sorted(events, key=lambda item: item[0]):
+            by_minute[minute] = temp
+
+        compact = []
+        for minute, temp in sorted(by_minute.items()):
+            if compact and compact[-1][1] == temp:
+                continue
+            compact.append((minute, temp))
+
+        signature = tuple(compact)
+        for day in day_plan.get("days", []):
+            try:
+                per_day[int(day)] = signature
+            except (TypeError, ValueError):
+                continue
+
+    if not per_day:
+        return None
+
+    default_day = ((0, default_temp),)
+    return tuple((day, per_day.get(day, default_day)) for day in range(7))
 
 
 def get_dhw_scenario(device):
