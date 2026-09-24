@@ -166,9 +166,17 @@ class AristonHeatingZoneSensor(AristonEntity, SensorEntity):
         icon: str,
         temperature: bool = False,
     ) -> None:
+        translation_key = {
+            "active_program": "heating_active_program",
+            "active_target": "heating_active_target_temperature",
+            "comfort": "heating_comfort_temperature",
+            "economy": "heating_economy_temperature",
+        }[kind]
         description = AristonHeatingSensorEntityDescription(
             key=f"Heating{kind.title().replace('_', '')}Zone{zone}",
             name=name,
+            translation_key=translation_key,
+            translation_placeholders={"zone": str(zone)},
             icon=icon,
             device_class=SensorDeviceClass.TEMPERATURE if temperature else None,
             state_class=SensorStateClass.MEASUREMENT if temperature else None,
@@ -213,7 +221,10 @@ class AristonGasEnergySensor(CoordinatorEntity, SensorEntity):
         real_device_info,
     ) -> None:
         super().__init__(coordinator)
-        self._attr_name = name
+        self._attr_has_entity_name = True
+        self._attr_translation_key = (
+            "gas_heating_energy_live" if suffix == "heating" else "gas_dhw_energy_live"
+        )
         self._attr_device_info = real_device_info
         self._series = series
         self._last_valid_value: float | None = None
