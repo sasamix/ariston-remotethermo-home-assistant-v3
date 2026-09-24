@@ -54,7 +54,8 @@ class AristonDhwScenarioName(AristonEntity, TextEntity):
 
     entity_description = AristonTextEntityDescription(
         key="DhwScenarioName",
-        name="Ariston DHW scenario name",
+        name=None,
+        translation_key="dhw_scenario_name",
         icon="mdi:form-textbox",
         entity_category=EntityCategory.CONFIG,
     )
@@ -64,6 +65,11 @@ class AristonDhwScenarioName(AristonEntity, TextEntity):
     def __init__(self, coordinator, manager) -> None:
         super().__init__(coordinator, self.entity_description)
         self.manager = manager
+
+    @property
+    def unique_id(self) -> str:
+        """Keep the pre-localization unique id."""
+        return f"{self.device.gateway}-Ariston DHW scenario name"
 
     @property
     def native_value(self) -> str:
@@ -85,7 +91,7 @@ class AristonHeatingScenarioName(AristonEntity, TextEntity):
     def __init__(self, coordinator, manager, zone: int) -> None:
         description = AristonTextEntityDescription(
             key=f"HeatingScenarioNameZone{zone}",
-            name=f"Ariston CH scenario zone {zone} name",
+            name=None,
             translation_key="heating_scenario_name",
             translation_placeholders={"zone": str(zone)},
             icon="mdi:form-textbox",
