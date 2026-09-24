@@ -138,13 +138,24 @@
         "name": "Ariston ГВС — комфортная температура"
       },
       "dhw_active_program": {
-        "name": "Ariston ГВС — активная программа"
+        "name": "Ariston ГВС — активная программа",
+        "state": {
+          "Comfort": "Комфорт",
+          "Economy": "Эконом",
+          "Manual": "Ручной"
+        }
       },
       "dhw_active_target_temperature": {
         "name": "Ariston ГВС — активная целевая температура"
       },
       "heating_active_program": {
-        "name": "Ariston отопление — активная программа зоны {zone}"
+        "name": "Ariston отопление — активная программа зоны {zone}",
+        "state": {
+          "Comfort": "Комфорт",
+          "Economy": "Эконом",
+          "Manual": "Ручной",
+          "Off": "Выключено"
+        }
       },
       "heating_active_target_temperature": {
         "name": "Ariston отопление — активная целевая температура зоны {zone}"
@@ -245,16 +256,37 @@
     },
     "select": {
       "dhw_scenario": {
-        "name": "Ariston ГВС — сценарий"
+        "name": "Ariston ГВС — сценарий",
+        "state": {
+          "Всегда Comfort": "Всегда комфорт",
+          "Семья": "Семья",
+          "Без обеда": "Без обеда",
+          "Дома днём": "Дома днём"
+        }
       },
       "energy_currency": {
         "name": "Ariston Энергия — валюта"
       },
       "energy_gas_type": {
-        "name": "Ariston Энергия — тип газа"
+        "name": "Ariston Энергия — тип газа",
+        "state": {
+          "NATURAL_GAS": "Природный газ",
+          "LPG": "СУГ",
+          "AIR_PROPANED": "Пропан-воздушная смесь",
+          "GPO": "GPO",
+          "PROPANE": "Пропан"
+        }
       },
       "energy_gas_energy_unit": {
-        "name": "Ariston Энергия — единица учёта газа"
+        "name": "Ariston Энергия — единица учёта газа",
+        "state": {
+          "KWH": "кВт·ч",
+          "GIGA_JOULE": "ГДж",
+          "THERM": "терм",
+          "MEGA_BTU": "млн БТЕ",
+          "SMC": "ст. м³",
+          "CUBE_METER": "м³"
+        }
       },
       "hybrid_mode": {
         "name": "Ariston гибридный режим"
@@ -266,7 +298,13 @@
         "name": "Ariston режим работы"
       },
       "heating_scenario": {
-        "name": "Ariston отопление — сценарий зоны {zone}"
+        "name": "Ariston отопление — сценарий зоны {zone}",
+        "state": {
+          "Всегда включен": "Всегда включено",
+          "Семья дома": "Семья дома",
+          "Полуденный": "Дома днём",
+          "Без обеденного перерыва": "Без обеденного перерыва"
+        }
       }
     },
     "text": {
