@@ -1429,7 +1429,7 @@ ARISTON_NUMBER_TYPES: list[AristonNumberEntityDescription] = [
     ),
     AristonNumberEntityDescription(
         key=ThermostatProperties.HEATING_FLOW_TEMP,
-        name=f"{NAME} System heating flow temperature",
+        name=f"{NAME} heating flow temperature",
         icon="mdi:thermometer",
         entity_category=EntityCategory.CONFIG,
         zone=True,
@@ -1451,7 +1451,7 @@ ARISTON_NUMBER_TYPES: list[AristonNumberEntityDescription] = [
     ),
     AristonNumberEntityDescription(
         key=ThermostatProperties.HEATING_FLOW_OFFSET,
-        name=f"{NAME} System heating flow offset",
+        name=f"{NAME} heating flow offset",
         icon="mdi:progress-wrench",
         entity_category=EntityCategory.CONFIG,
         zone=True,
