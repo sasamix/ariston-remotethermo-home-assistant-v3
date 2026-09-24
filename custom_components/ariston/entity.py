@@ -123,9 +123,15 @@ class AristonEntity(CoordinatorEntity, ABC):
         if unique_name is None:
             unique_name = self.name
 
-        # Zoned Number entities historically appended the zone in their name
-        # and AristonEntity appended the zone once more to the unique ID.
-        if self.zone and getattr(self.entity_description, "zone", False):
+        # For the two heating-flow controls the historical mapping above used
+        # the base name, then AristonEntity appended the zone once. Other zoned
+        # descriptions used their display name with a zone suffix already in
+        # it. Never append a second zone to the mapped heating-flow IDs.
+        if (
+            self.zone
+            and getattr(self.entity_description, "zone", False)
+            and self.entity_description.key not in _LEGACY_UNIQUE_ID_NAMES
+        ):
             unique_name = f"{unique_name} {self.zone}"
 
         return (

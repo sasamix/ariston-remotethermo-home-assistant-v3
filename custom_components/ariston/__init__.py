@@ -558,6 +558,40 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+        # The controls were once renamed to "System heating flow ..." and a
+        # later localization build accidentally doubled their zone in unique_id.
+        # Keep those registry entries and their history, but disable the stale
+        # copies once the original working controls are registered again.
+        registry = er.async_get(hass)
+        for zone in device.zone_numbers:
+            for label in ("temperature", "offset"):
+                original_unique_id = (
+                    f"{device.gateway}-Ariston heating flow {label}-{zone}"
+                )
+                if registry.async_get_entity_id(
+                    "number", DOMAIN, original_unique_id
+                ) is None:
+                    continue
+                for old_name in (
+                    f"Ariston System heating flow {label} {zone}-{zone}",
+                    f"Ariston heating flow {label} {zone}-{zone}",
+                ):
+                    stale_entity_id = registry.async_get_entity_id(
+                        "number", DOMAIN, f"{device.gateway}-{old_name}"
+                    )
+                    if stale_entity_id is None:
+                        continue
+                    stale_entry = registry.async_get(stale_entity_id)
+                    if (
+                        stale_entry
+                        and stale_entry.config_entry_id == entry.entry_id
+                        and stale_entry.disabled_by is None
+                    ):
+                        registry.async_update_entity(
+                            stale_entity_id,
+                            disabled_by=er.RegistryEntryDisabler.INTEGRATION,
+                        )
+
         entry.async_on_unload(entry.add_update_listener(update_listener))
 
         if device.system_type == SystemType.GALEVO:
