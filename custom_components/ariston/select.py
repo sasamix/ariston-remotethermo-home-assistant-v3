@@ -77,6 +77,8 @@ class AristonHeatingScenarioSelect(AristonEntity, SelectEntity):
         description = AristonHeatingSelectEntityDescription(
             key=f"HeatingScenarioZone{zone}",
             name=f"Ariston CH scenario zone {zone}",
+            translation_key="heating_scenario",
+            translation_placeholders={"zone": str(zone)},
             icon="mdi:radiator",
             entity_category=EntityCategory.CONFIG,
         )
