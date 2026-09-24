@@ -32,5 +32,334 @@
         }
       }
     }
+  },
+  "entity": {
+    "sensor": {
+      "gas_heating_current_2h_volume": {
+        "name": "Heating gas — current 2 hours"
+      },
+      "gas_dhw_current_2h_volume": {
+        "name": "DHW gas — current 2 hours"
+      },
+      "gas_heating_current_month": {
+        "name": "Heating gas — current month"
+      },
+      "gas_dhw_current_month": {
+        "name": "DHW gas — current month"
+      },
+      "gas_heating_current_2h_average_flow": {
+        "name": "Heating gas — average flow for current 2 hours"
+      },
+      "gas_dhw_current_2h_average_flow": {
+        "name": "DHW gas — average flow for current 2 hours"
+      },
+      "heating_circuit_pressure": {
+        "name": "Heating circuit pressure"
+      },
+      "ch_flow_setpoint_temperature": {
+        "name": "Ariston CH flow setpoint temperature"
+      },
+      "ch_flow_temperature": {
+        "name": "Ariston CH flow temperature"
+      },
+      "signal_level": {
+        "name": "Signal level"
+      },
+      "ch_return_temperature": {
+        "name": "Ariston CH return temperature"
+      },
+      "outside_temperature": {
+        "name": "Ariston outside temperature"
+      },
+      "average_showers": {
+        "name": "Ariston average showers"
+      },
+      "electricity_heating_last_month": {
+        "name": "Ariston electricity consumption for heating last month"
+      },
+      "electricity_cooling_last_month": {
+        "name": "Ariston electricity consumption for cooling last month"
+      },
+      "electricity_water_last_month": {
+        "name": "Ariston electricity consumption for water last month"
+      },
+      "heating_total_energy_consumption": {
+        "name": "Heating — total energy consumption"
+      },
+      "dhw_total_energy_consumption": {
+        "name": "DHW — total energy consumption"
+      },
+      "central_heating_gas_consumption": {
+        "name": "Ariston central heating gas consumption"
+      },
+      "dhw_heating_pump_electricity_consumption": {
+        "name": "Ariston DHW heating pump electricity consumption"
+      },
+      "dhw_resistor_electricity_consumption": {
+        "name": "Ariston DHW resistor electricity consumption"
+      },
+      "dhw_gas_consumption": {
+        "name": "Ariston DHW gas consumption"
+      },
+      "gas_heating_hourly_average_power": {
+        "name": "Heating gas — hourly average power"
+      },
+      "gas_dhw_hourly_average_power": {
+        "name": "DHW gas — hourly average power"
+      },
+      "central_heating_electricity_consumption": {
+        "name": "Ariston central heating electricity consumption"
+      },
+      "dhw_electricity_consumption": {
+        "name": "Ariston DHW electricity consumption"
+      },
+      "remaining_time": {
+        "name": "Ariston remaining time"
+      },
+      "heating_rate": {
+        "name": "Ariston heating rate"
+      },
+      "bus_error_count": {
+        "name": "Bus error count"
+      },
+      "current_temperature": {
+        "name": "Ariston current temperature"
+      },
+      "process_requested_temperature": {
+        "name": "Ariston process requested temperature"
+      },
+      "dhw_current_temperature": {
+        "name": "Ariston DHW current temperature"
+      },
+      "dhw_economy_temperature": {
+        "name": "Ariston DHW economy temperature"
+      },
+      "dhw_comfort_temperature": {
+        "name": "Ariston DHW comfort temperature"
+      },
+      "dhw_active_program": {
+        "name": "Ariston DHW active program",
+        "state": {
+          "Comfort": "Comfort",
+          "Economy": "Economy",
+          "Manual": "Manual"
+        }
+      },
+      "dhw_active_target_temperature": {
+        "name": "Ariston DHW active target temperature"
+      },
+      "heating_active_program": {
+        "name": "Ariston heating active program zone {zone}",
+        "state": {
+          "Comfort": "Comfort",
+          "Economy": "Economy",
+          "Manual": "Manual",
+          "Off": "Off"
+        }
+      },
+      "heating_active_target_temperature": {
+        "name": "Ariston heating active target temperature zone {zone}"
+      },
+      "heating_comfort_temperature": {
+        "name": "Ariston heating comfort temperature zone {zone}"
+      },
+      "heating_economy_temperature": {
+        "name": "Ariston heating economy temperature zone {zone}"
+      },
+      "gas_heating_energy_live": {
+        "name": "Heating gas — Energy Live"
+      },
+      "gas_dhw_energy_live": {
+        "name": "DHW gas — Energy Live"
+      }
+    },
+    "binary_sensor": {
+      "flame_active": {
+        "name": "Ariston flame active"
+      },
+      "heating_pump_active": {
+        "name": "Ariston heating pump active"
+      },
+      "holiday_mode": {
+        "name": "Ariston holiday mode"
+      },
+      "heating_active": {
+        "name": "Ariston heating active"
+      },
+      "anti_legionella_cycle": {
+        "name": "Ariston anti-legionella cycle"
+      }
+    },
+    "switch": {
+      "automatic_thermoregulation": {
+        "name": "Ariston automatic thermoregulation"
+      },
+      "quiet_mode": {
+        "name": "Ariston quiet mode"
+      },
+      "eco_mode": {
+        "name": "Ariston eco mode"
+      },
+      "power_option": {
+        "name": "Ariston power option"
+      },
+      "power": {
+        "name": "Ariston power"
+      },
+      "anti_legionella": {
+        "name": "Ariston anti-legionella"
+      },
+      "preheating": {
+        "name": "Ariston preheating"
+      },
+      "boost": {
+        "name": "Ariston boost"
+      },
+      "permanent_boost": {
+        "name": "Ariston permanent boost"
+      },
+      "anti_cooling": {
+        "name": "Ariston anti-cooling"
+      },
+      "night_mode": {
+        "name": "Ariston night mode"
+      }
+    },
+    "number": {
+      "energy_electricity_cost": {
+        "name": "Ariston Energy electricity cost"
+      },
+      "energy_gas_cost": {
+        "name": "Ariston Energy gas cost"
+      },
+      "max_setpoint_temperature": {
+        "name": "Ariston maximum setpoint temperature"
+      },
+      "min_setpoint_temperature": {
+        "name": "Ariston minimum setpoint temperature"
+      },
+      "reduced_temperature": {
+        "name": "Ariston reduced temperature"
+      },
+      "heating_flow_temperature": {
+        "name": "Ariston heating flow temperature"
+      },
+      "heating_flow_offset": {
+        "name": "Ariston heating flow offset"
+      },
+      "requested_showers": {
+        "name": "Ariston requested number of showers"
+      },
+      "anti_cooling_temperature": {
+        "name": "Ariston anti-cooling temperature"
+      }
+    },
+    "select": {
+      "dhw_scenario": {
+        "name": "Ariston DHW scenario",
+        "state": {
+          "Всегда Comfort": "Always Comfort",
+          "Семья": "Family",
+          "Без обеда": "No lunch",
+          "Дома днём": "Home during the day"
+        }
+      },
+      "energy_currency": {
+        "name": "Ariston Energy currency"
+      },
+      "energy_gas_type": {
+        "name": "Ariston Energy gas type",
+        "state": {
+          "NATURAL_GAS": "Natural gas",
+          "LPG": "LPG",
+          "AIR_PROPANED": "Propane-air gas",
+          "GPO": "GPO",
+          "PROPANE": "Propane"
+        }
+      },
+      "energy_gas_energy_unit": {
+        "name": "Ariston Energy gas energy unit",
+        "state": {
+          "KWH": "kWh",
+          "GIGA_JOULE": "GJ",
+          "THERM": "therm",
+          "MEGA_BTU": "MMBtu",
+          "SMC": "Sm³",
+          "CUBE_METER": "m³"
+        }
+      },
+      "hybrid_mode": {
+        "name": "Ariston hybrid mode"
+      },
+      "buffer_control_mode": {
+        "name": "Ariston buffer control mode"
+      },
+      "operation_mode": {
+        "name": "Ariston operation mode"
+      },
+      "heating_scenario": {
+        "name": "Ariston CH scenario zone {zone}",
+        "state": {
+          "Всегда включен": "Always on",
+          "Семья дома": "Family home",
+          "Полуденный": "Midday",
+          "Без обеденного перерыва": "No lunch break"
+        }
+      }
+    },
+    "text": {
+      "dhw_scenario_name": {
+        "name": "Ariston DHW scenario name"
+      },
+      "heating_scenario_name": {
+        "name": "Ariston CH scenario zone {zone} name"
+      }
+    },
+    "button": {
+      "dhw_scenario_save": {
+        "name": "Ariston DHW scenario save"
+      },
+      "heating_scenario_save": {
+        "name": "Ariston CH scenario zone {zone} save"
+      }
+    }
+  },
+  "services": {
+    "create_vacation": {
+      "name": "Create vacation",
+      "description": "Create or remove vacation mode on the selected Ariston device.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "Ariston device on which to create the vacation."
+        },
+        "end_date": {
+          "name": "End date",
+          "description": "Date when the vacation ends. Leave empty to remove the vacation."
+        }
+      }
+    },
+    "set_item_by_id": {
+      "name": "Set item by ID",
+      "description": "Set an Ariston device or thermostat property.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "Ariston device on which to set the property."
+        },
+        "item_id": {
+          "name": "Device or thermostat property",
+          "description": "Ariston device or thermostat property to change."
+        },
+        "zone": {
+          "name": "Thermostat zone",
+          "description": "Zone number. Use 0 for a device-level property."
+        },
+        "value": {
+          "name": "Value",
+          "description": "Value to set."
+        }
+      }
+    }
   }
 }
