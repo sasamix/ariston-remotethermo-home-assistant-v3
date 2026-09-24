@@ -17,6 +17,6 @@
     "ariston==0.19.9"
   ],
   "ssdp": [],
-  "version": "0.20.0",
+  "version": "0.20.1",
   "zeroconf": []
 }
