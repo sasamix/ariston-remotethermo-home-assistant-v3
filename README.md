@@ -102,3 +102,17 @@ Ariston and switches the zone to time-program mode.
 
 Only scenario names and schedule payloads are persisted by this feature. Credentials,
 account data and gateway identifiers are not stored in the scenario mapping.
+
+
+## English and Russian localization
+
+This fork includes complete English and Russian translations for the Home Assistant UI:
+entity names, configuration/options flows, service actions, DHW controls, heating
+scenario controls, Energy settings and the additional diagnostic/energy entities.
+
+Home Assistant entity localization follows the Home Assistant backend/system language.
+Built-in DHW and heating scenario labels also follow that language. User-created scenario
+names are intentionally kept exactly as entered by the user.
+
+Existing entity IDs and legacy unique IDs are preserved; changing the UI language does
+not create replacement entities or reset Recorder/Energy history.
