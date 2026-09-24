@@ -85,7 +85,7 @@ class AristonHeatingScenarioName(AristonEntity, TextEntity):
     def __init__(self, coordinator, manager, zone: int) -> None:
         description = AristonTextEntityDescription(
             key=f"HeatingScenarioNameZone{zone}",
-            name=f"Ariston CH heating scenario name zone {zone}",
+            name=f"Ariston CH scenario name zone {zone}",
             icon="mdi:form-textbox",
             entity_category=EntityCategory.CONFIG,
         )
