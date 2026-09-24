@@ -1365,7 +1365,7 @@ ARISTON_NUMBER_TYPES: list[AristonNumberEntityDescription] = [
     ),
     AristonNumberEntityDescription(
         key=ConsumptionProperties.GAS_COST,
-        name=f"{NAME} gas cost",
+        name=f"{NAME} Energy gas cost",
         icon="mdi:currency-sign",
         entity_category=EntityCategory.CONFIG,
         native_min_value=0,
@@ -1429,7 +1429,7 @@ ARISTON_NUMBER_TYPES: list[AristonNumberEntityDescription] = [
     ),
     AristonNumberEntityDescription(
         key=ThermostatProperties.HEATING_FLOW_TEMP,
-        name=f"{NAME} heating flow temperature",
+        name=f"{NAME} System heating flow temperature",
         icon="mdi:thermometer",
         entity_category=EntityCategory.CONFIG,
         zone=True,
@@ -1451,7 +1451,7 @@ ARISTON_NUMBER_TYPES: list[AristonNumberEntityDescription] = [
     ),
     AristonNumberEntityDescription(
         key=ThermostatProperties.HEATING_FLOW_OFFSET,
-        name=f"{NAME} heating flow offset",
+        name=f"{NAME} System heating flow offset",
         icon="mdi:progress-wrench",
         entity_category=EntityCategory.CONFIG,
         zone=True,
@@ -1512,7 +1512,7 @@ ARISTON_SELECT_TYPES: list[AristonSelectEntityDescription] = [
     ),
     AristonSelectEntityDescription(
         key=ConsumptionProperties.CURRENCY,
-        name=f"{NAME} currency",
+        name=f"{NAME} Energy currency",
         icon="mdi:cash-100",
         device_class=SensorDeviceClass.MONETARY,
         entity_category=EntityCategory.CONFIG,
@@ -1525,7 +1525,7 @@ ARISTON_SELECT_TYPES: list[AristonSelectEntityDescription] = [
     ),
     AristonSelectEntityDescription(
         key=ConsumptionProperties.GAS_TYPE,
-        name=f"{NAME} gas type",
+        name=f"{NAME} Energy gas type",
         icon="mdi:gas-cylinder",
         entity_category=EntityCategory.CONFIG,
         device_features=[DeviceFeatures.HAS_METERING],
@@ -1537,7 +1537,7 @@ ARISTON_SELECT_TYPES: list[AristonSelectEntityDescription] = [
     ),
     AristonSelectEntityDescription(
         key=ConsumptionProperties.GAS_ENERGY_UNIT,
-        name=f"{NAME} gas energy unit",
+        name=f"{NAME} Energy gas energy unit",
         icon="mdi:cube-scan",
         entity_category=EntityCategory.CONFIG,
         device_features=[DeviceFeatures.HAS_METERING],
