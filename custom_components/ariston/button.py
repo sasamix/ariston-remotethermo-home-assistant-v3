@@ -74,12 +74,20 @@ class AristonSaveCurrentHeatingScenario(AristonEntity, ButtonEntity):
     def __init__(self, coordinator, manager, zone: int) -> None:
         description = AristonButtonEntityDescription(
             key=f"SaveCurrentHeatingScenarioZone{zone}",
-            name=f"Ariston save current heating scenario zone {zone}",
+            name=f"Ariston CH save current heating scenario zone {zone}",
             icon="mdi:content-save",
             entity_category=EntityCategory.CONFIG,
         )
         super().__init__(coordinator, description, zone)
         self.manager = manager
+
+    @property
+    def unique_id(self) -> str:
+        """Keep the original unique id while changing display order/name."""
+        return (
+            f"{self.device.gateway}-"
+            f"Ariston save current heating scenario zone {self.zone}-{self.zone}"
+        )
 
     async def async_press(self) -> None:
         """Save the current heating schedule under the text entity draft."""
