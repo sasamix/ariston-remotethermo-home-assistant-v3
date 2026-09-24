@@ -116,7 +116,8 @@ class AristonEntity(CoordinatorEntity, ABC):
         """
         unique_name = _LEGACY_UNIQUE_ID_NAMES.get(
             self.entity_description.key,
-            getattr(self.entity_description, "name", None),
+            getattr(self.entity_description, "legacy_name", None)
+            or getattr(self.entity_description, "name", None),
         )
 
         if unique_name is None:
