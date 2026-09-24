@@ -85,7 +85,7 @@ class AristonHeatingScenarioName(AristonEntity, TextEntity):
     def __init__(self, coordinator, manager, zone: int) -> None:
         description = AristonTextEntityDescription(
             key=f"HeatingScenarioNameZone{zone}",
-            name=f"Ariston CH scenario name zone {zone}",
+            name=f"Ariston CH scenario zone {zone} name",
             icon="mdi:form-textbox",
             entity_category=EntityCategory.CONFIG,
         )
@@ -102,8 +102,8 @@ class AristonHeatingScenarioName(AristonEntity, TextEntity):
 
     @property
     def native_value(self) -> str:
-        """Return the current draft name."""
-        return self.manager.draft_name
+        """Mirror the recognized heating scenario; keep draft for an unknown plan."""
+        return self.manager.current_name or self.manager.draft_name
 
     async def async_set_value(self, value: str) -> None:
         """Save the current heating schedule under the entered name."""
