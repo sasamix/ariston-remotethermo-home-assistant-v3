@@ -209,7 +209,7 @@ class HeatingScenarioManager:
             }
 
         current = self.current_name
-        if current and current in self.custom_scenarios:
+        if current:
             self.draft_name = current
 
     @property
@@ -397,7 +397,9 @@ class HeatingScenarioManager:
         ):
             await self.device.async_set_zone_mode(ZoneMode.TIME_PROGRAM, self.zone)
 
-        self.draft_name = name if name in self.custom_scenarios else ""
+        # Mirror the selected scenario in the text field for both standard and
+        # HA-defined scenarios, exactly like the selector state.
+        self.draft_name = name
         await self.coordinator.async_request_refresh()
 
 
