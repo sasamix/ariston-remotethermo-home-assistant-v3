@@ -17,6 +17,21 @@ _LOGGER = logging.getLogger(__name__)
 DHW_SCENARIO_MANAGER = "dhw_scenario_manager"
 _STORAGE_VERSION = 1
 
+_DHW_SCENARIO_LABELS = {
+    "ru": {
+        "Всегда Comfort": "Всегда Comfort",
+        "Семья": "Семья",
+        "Без обеда": "Без обеда",
+        "Дома днём": "Дома днём",
+    },
+    "en": {
+        "Всегда Comfort": "Always Comfort",
+        "Семья": "Family",
+        "Без обеда": "No lunch",
+        "Дома днём": "Home during the day",
+    },
+}
+
 
 def _normalize_temp_marker(value):
     """Normalize Ariston 0/1 markers without changing other temperature values."""
@@ -124,10 +139,35 @@ class DhwScenarioManager:
             self.draft_name = current
 
     @property
+    def _language(self) -> str:
+        """Return the supported backend language used for scenario labels."""
+        language = (self.hass.config.language or "en").lower()
+        return "ru" if language.startswith("ru") else "en"
+
+    def _localized_builtin_name(self, canonical_name: str) -> str:
+        """Return the built-in scenario label for the active HA language."""
+        return _DHW_SCENARIO_LABELS[self._language].get(
+            canonical_name, canonical_name
+        )
+
+    def _canonical_builtin_name(self, displayed_name: str) -> str | None:
+        """Resolve either localized or canonical built-in scenario name."""
+        if displayed_name in DHW_SCENARIOS:
+            return displayed_name
+        for canonical_name, label in _DHW_SCENARIO_LABELS[self._language].items():
+            if displayed_name == label:
+                return canonical_name
+        return None
+
+    @property
     def options(self) -> list[str]:
-        """Return built-in and Home Assistant-defined scenario names."""
-        return list(DHW_SCENARIOS) + [
-            name for name in self.custom_scenarios if name not in DHW_SCENARIOS
+        """Return localized built-in and user-defined scenario names."""
+        builtin_labels = [
+            self._localized_builtin_name(name) for name in DHW_SCENARIOS
+        ]
+        reserved = set(DHW_SCENARIOS) | set(builtin_labels)
+        return builtin_labels + [
+            name for name in self.custom_scenarios if name not in reserved
         ]
 
     @property
@@ -141,7 +181,7 @@ class DhwScenarioManager:
 
         for name, scenario in DHW_SCENARIOS.items():
             if current_signature == _plan_signature(scenario):
-                return name
+                return self._localized_builtin_name(name)
 
         for name, scenario in self.custom_scenarios.items():
             if current_signature == _plan_signature(scenario):
@@ -154,7 +194,7 @@ class DhwScenarioManager:
         name = (name or "").strip()
         if not name:
             raise ValueError("DHW scenario name must not be empty")
-        if name in DHW_SCENARIOS:
+        if self._canonical_builtin_name(name) is not None:
             raise ValueError(
                 f"'{name}' is a built-in DHW scenario name; choose another name"
             )
@@ -186,7 +226,12 @@ class DhwScenarioManager:
 
     async def async_apply(self, name: str) -> None:
         """Apply a built-in or HA-defined DHW scenario through Ariston API v2."""
-        scenario = DHW_SCENARIOS.get(name)
+        canonical_name = self._canonical_builtin_name(name)
+        scenario = (
+            DHW_SCENARIOS.get(canonical_name)
+            if canonical_name is not None
+            else None
+        )
         if scenario is None:
             scenario = self.custom_scenarios.get(name)
         if scenario is None:
