@@ -13,7 +13,9 @@
       "user": {
         "data": {
           "password": "Пароль",
-          "username": "Имя пользователя"
+          "username": "Имя пользователя",
+          "api_url_setting": "URL API Ariston",
+          "api_user_agent": "User-Agent API Ariston"
         }
       }
     }
@@ -22,11 +24,303 @@
     "step": {
       "init": {
         "data": {
-          "extra_energy_features": "Дополнительные объекты, связанные с энергией.",
-          "scan_interval": "Интервал сканирования зоны (секунды).",
-          "energy_scan_interval": "Интервал сканирования энергии (минуты)."
+          "extra_energy_features": "Дополнительные сущности энергопотребления",
+          "scan_interval": "Интервал опроса зон (секунды)",
+          "energy_scan_interval": "Интервал опроса энергопотребления (минуты)",
+          "bus_errors_scan_interval": "Интервал опроса ошибок шины (секунды)"
         },
-        "title": "Настроить Аристон"
+        "title": "Настройка Ariston"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "gas_heating_current_2h_volume": {
+        "name": "Газ отопления — текущие 2 часа"
+      },
+      "gas_dhw_current_2h_volume": {
+        "name": "Газ ГВС — текущие 2 часа"
+      },
+      "gas_heating_current_month": {
+        "name": "Газ отопления — текущий месяц"
+      },
+      "gas_dhw_current_month": {
+        "name": "Газ ГВС — текущий месяц"
+      },
+      "gas_heating_current_2h_average_flow": {
+        "name": "Газ отопления — средний расход за текущие 2 часа"
+      },
+      "gas_dhw_current_2h_average_flow": {
+        "name": "Газ ГВС — средний расход за текущие 2 часа"
+      },
+      "heating_circuit_pressure": {
+        "name": "Давление в контуре отопления"
+      },
+      "ch_flow_setpoint_temperature": {
+        "name": "Ariston заданная температура подачи отопления"
+      },
+      "ch_flow_temperature": {
+        "name": "Ariston температура подачи отопления"
+      },
+      "signal_level": {
+        "name": "Уровень сигнала"
+      },
+      "ch_return_temperature": {
+        "name": "Ariston температура обратки отопления"
+      },
+      "outside_temperature": {
+        "name": "Ariston наружная температура"
+      },
+      "average_showers": {
+        "name": "Ariston среднее количество душей"
+      },
+      "electricity_heating_last_month": {
+        "name": "Ariston электроэнергия на отопление за прошлый месяц"
+      },
+      "electricity_cooling_last_month": {
+        "name": "Ariston электроэнергия на охлаждение за прошлый месяц"
+      },
+      "electricity_water_last_month": {
+        "name": "Ariston электроэнергия на ГВС за прошлый месяц"
+      },
+      "heating_total_energy_consumption": {
+        "name": "Отопление — общее энергопотребление"
+      },
+      "dhw_total_energy_consumption": {
+        "name": "ГВС — общее энергопотребление"
+      },
+      "central_heating_gas_consumption": {
+        "name": "Ariston расход газа на отопление"
+      },
+      "dhw_heating_pump_electricity_consumption": {
+        "name": "Ariston ГВС — электроэнергия теплового насоса"
+      },
+      "dhw_resistor_electricity_consumption": {
+        "name": "Ariston ГВС — электроэнергия ТЭНа"
+      },
+      "dhw_gas_consumption": {
+        "name": "Ariston расход газа на ГВС"
+      },
+      "gas_heating_hourly_average_power": {
+        "name": "Газ отопления — средняя мощность за час"
+      },
+      "gas_dhw_hourly_average_power": {
+        "name": "Газ ГВС — средняя мощность за час"
+      },
+      "central_heating_electricity_consumption": {
+        "name": "Ariston расход электроэнергии на отопление"
+      },
+      "dhw_electricity_consumption": {
+        "name": "Ariston расход электроэнергии на ГВС"
+      },
+      "remaining_time": {
+        "name": "Ariston оставшееся время"
+      },
+      "heating_rate": {
+        "name": "Ariston скорость нагрева"
+      },
+      "bus_error_count": {
+        "name": "Количество ошибок шины"
+      },
+      "current_temperature": {
+        "name": "Ariston текущая температура"
+      },
+      "process_requested_temperature": {
+        "name": "Ariston требуемая температура"
+      },
+      "dhw_current_temperature": {
+        "name": "Ariston ГВС — текущая температура"
+      },
+      "dhw_economy_temperature": {
+        "name": "Ariston ГВС — экономичная температура"
+      },
+      "dhw_comfort_temperature": {
+        "name": "Ariston ГВС — комфортная температура"
+      },
+      "dhw_active_program": {
+        "name": "Ariston ГВС — активная программа"
+      },
+      "dhw_active_target_temperature": {
+        "name": "Ariston ГВС — активная целевая температура"
+      },
+      "heating_active_program": {
+        "name": "Ariston отопление — активная программа зоны {zone}"
+      },
+      "heating_active_target_temperature": {
+        "name": "Ariston отопление — активная целевая температура зоны {zone}"
+      },
+      "heating_comfort_temperature": {
+        "name": "Ariston отопление — комфортная температура зоны {zone}"
+      },
+      "heating_economy_temperature": {
+        "name": "Ariston отопление — экономичная температура зоны {zone}"
+      },
+      "gas_heating_energy_live": {
+        "name": "Газ отопления — накопительный счётчик"
+      },
+      "gas_dhw_energy_live": {
+        "name": "Газ ГВС — накопительный счётчик"
+      }
+    },
+    "binary_sensor": {
+      "flame_active": {
+        "name": "Ariston пламя включено"
+      },
+      "heating_pump_active": {
+        "name": "Ariston насос отопления включён"
+      },
+      "holiday_mode": {
+        "name": "Ariston режим отпуска"
+      },
+      "heating_active": {
+        "name": "Ariston нагрев активен"
+      },
+      "anti_legionella_cycle": {
+        "name": "Ariston цикл анти-легионелла"
+      }
+    },
+    "switch": {
+      "automatic_thermoregulation": {
+        "name": "Ariston автоматическая терморегуляция"
+      },
+      "quiet_mode": {
+        "name": "Ariston тихий режим"
+      },
+      "eco_mode": {
+        "name": "Ariston эко-режим"
+      },
+      "power_option": {
+        "name": "Ariston опция питания"
+      },
+      "power": {
+        "name": "Ariston питание"
+      },
+      "anti_legionella": {
+        "name": "Ariston анти-легионелла"
+      },
+      "preheating": {
+        "name": "Ariston преднагрев"
+      },
+      "boost": {
+        "name": "Ariston ускоренный нагрев"
+      },
+      "permanent_boost": {
+        "name": "Ariston постоянный ускоренный нагрев"
+      },
+      "anti_cooling": {
+        "name": "Ariston защита от охлаждения"
+      },
+      "night_mode": {
+        "name": "Ariston ночной режим"
+      }
+    },
+    "number": {
+      "energy_electricity_cost": {
+        "name": "Ariston Энергия — стоимость электроэнергии"
+      },
+      "energy_gas_cost": {
+        "name": "Ariston Энергия — стоимость газа"
+      },
+      "max_setpoint_temperature": {
+        "name": "Ariston максимальная заданная температура"
+      },
+      "min_setpoint_temperature": {
+        "name": "Ariston минимальная заданная температура"
+      },
+      "reduced_temperature": {
+        "name": "Ariston пониженная температура"
+      },
+      "heating_flow_temperature": {
+        "name": "Ariston температура подачи отопления"
+      },
+      "heating_flow_offset": {
+        "name": "Ariston смещение температуры подачи отопления"
+      },
+      "requested_showers": {
+        "name": "Ariston требуемое количество душей"
+      },
+      "anti_cooling_temperature": {
+        "name": "Ariston температура защиты от охлаждения"
+      }
+    },
+    "select": {
+      "dhw_scenario": {
+        "name": "Ariston ГВС — сценарий"
+      },
+      "energy_currency": {
+        "name": "Ariston Энергия — валюта"
+      },
+      "energy_gas_type": {
+        "name": "Ariston Энергия — тип газа"
+      },
+      "energy_gas_energy_unit": {
+        "name": "Ariston Энергия — единица учёта газа"
+      },
+      "hybrid_mode": {
+        "name": "Ariston гибридный режим"
+      },
+      "buffer_control_mode": {
+        "name": "Ariston режим управления буфером"
+      },
+      "operation_mode": {
+        "name": "Ariston режим работы"
+      },
+      "heating_scenario": {
+        "name": "Ariston отопление — сценарий зоны {zone}"
+      }
+    },
+    "text": {
+      "dhw_scenario_name": {
+        "name": "Ariston ГВС — название сценария"
+      },
+      "heating_scenario_name": {
+        "name": "Ariston отопление — название сценария зоны {zone}"
+      }
+    },
+    "button": {
+      "dhw_scenario_save": {
+        "name": "Ariston ГВС — сохранить сценарий"
+      },
+      "heating_scenario_save": {
+        "name": "Ariston отопление — сохранить сценарий зоны {zone}"
+      }
+    }
+  },
+  "services": {
+    "create_vacation": {
+      "name": "Создать отпуск",
+      "description": "Создать или удалить режим отпуска на выбранном устройстве Ariston.",
+      "fields": {
+        "device_id": {
+          "name": "Устройство",
+          "description": "Устройство Ariston, для которого нужно настроить отпуск."
+        },
+        "end_date": {
+          "name": "Дата окончания",
+          "description": "Дата окончания отпуска. Оставьте пустым, чтобы удалить отпуск."
+        }
+      }
+    },
+    "set_item_by_id": {
+      "name": "Установить параметр по ID",
+      "description": "Изменить параметр устройства Ariston или термостата.",
+      "fields": {
+        "device_id": {
+          "name": "Устройство",
+          "description": "Устройство Ariston, у которого нужно изменить параметр."
+        },
+        "item_id": {
+          "name": "Параметр устройства или термостата",
+          "description": "Параметр Ariston, который нужно изменить."
+        },
+        "zone": {
+          "name": "Зона термостата",
+          "description": "Номер зоны. Для параметра устройства используйте 0."
+        },
+        "value": {
+          "name": "Значение",
+          "description": "Значение, которое нужно установить."
+        }
       }
     }
   }
