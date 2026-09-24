@@ -86,6 +86,8 @@ class AristonHeatingScenarioName(AristonEntity, TextEntity):
         description = AristonTextEntityDescription(
             key=f"HeatingScenarioNameZone{zone}",
             name=f"Ariston CH scenario zone {zone} name",
+            translation_key="heating_scenario_name",
+            translation_placeholders={"zone": str(zone)},
             icon="mdi:form-textbox",
             entity_category=EntityCategory.CONFIG,
         )
