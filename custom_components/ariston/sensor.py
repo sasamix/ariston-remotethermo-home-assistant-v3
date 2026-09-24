@@ -179,7 +179,18 @@ class AristonHeatingZoneSensor(AristonEntity, SensorEntity):
             translation_key=translation_key,
             translation_placeholders={"zone": str(zone)},
             icon=icon,
-            device_class=SensorDeviceClass.TEMPERATURE if temperature else None,
+            device_class=(
+                SensorDeviceClass.TEMPERATURE
+                if temperature
+                else SensorDeviceClass.ENUM
+                if kind == "active_program"
+                else None
+            ),
+            options=(
+                ["Comfort", "Economy", "Manual", "Off"]
+                if kind == "active_program"
+                else None
+            ),
             state_class=SensorStateClass.MEASUREMENT if temperature else None,
             native_unit_of_measurement=(
                 UnitOfTemperature.CELSIUS if temperature else None
