@@ -76,7 +76,7 @@ class AristonHeatingScenarioSelect(AristonEntity, SelectEntity):
     def __init__(self, coordinator, manager, zone: int) -> None:
         description = AristonHeatingSelectEntityDescription(
             key=f"HeatingScenarioZone{zone}",
-            name=f"Ariston CH scenario zone {zone}",
+            name=None,
             translation_key="heating_scenario",
             translation_placeholders={"zone": str(zone)},
             icon="mdi:radiator",
