@@ -556,41 +556,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 )
             )
 
-        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
-        # The controls were once renamed to "System heating flow ..." and a
-        # later localization build accidentally doubled their zone in unique_id.
-        # Keep those registry entries and their history, but disable the stale
-        # copies once the original working controls are registered again.
+        # 0.20.1 incorrectly disabled the two existing System heating-flow
+        # numbers. Undo that migration before their platform is set up, while
+        # respecting any entries the user explicitly disabled.
         registry = er.async_get(hass)
         for zone in device.zone_numbers:
             for label in ("temperature", "offset"):
-                original_unique_id = (
-                    f"{device.gateway}-Ariston heating flow {label}-{zone}"
+                unique_id = (
+                    f"{device.gateway}-Ariston System heating flow "
+                    f"{label} {zone}-{zone}"
                 )
-                if registry.async_get_entity_id(
-                    "number", DOMAIN, original_unique_id
-                ) is None:
-                    continue
-                for old_name in (
-                    f"Ariston System heating flow {label} {zone}-{zone}",
-                    f"Ariston heating flow {label} {zone}-{zone}",
+                entity_id = registry.async_get_entity_id("number", DOMAIN, unique_id)
+                registered = registry.async_get(entity_id) if entity_id else None
+                if (
+                    registered
+                    and registered.config_entry_id == entry.entry_id
+                    and registered.disabled_by == er.RegistryEntryDisabler.INTEGRATION
                 ):
-                    stale_entity_id = registry.async_get_entity_id(
-                        "number", DOMAIN, f"{device.gateway}-{old_name}"
-                    )
-                    if stale_entity_id is None:
-                        continue
-                    stale_entry = registry.async_get(stale_entity_id)
-                    if (
-                        stale_entry
-                        and stale_entry.config_entry_id == entry.entry_id
-                        and stale_entry.disabled_by is None
-                    ):
-                        registry.async_update_entity(
-                            stale_entity_id,
-                            disabled_by=er.RegistryEntryDisabler.INTEGRATION,
-                        )
+                    registry.async_update_entity(entity_id, disabled_by=None)
+
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
         entry.async_on_unload(entry.add_update_listener(update_listener))
 
