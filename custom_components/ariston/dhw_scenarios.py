@@ -18,21 +18,73 @@ DHW_SCENARIO_MANAGER = "dhw_scenario_manager"
 _STORAGE_VERSION = 1
 
 
+def _normalize_temp_marker(value):
+    """Normalize Ariston 0/1 markers without changing other temperature values."""
+    if value in (0, 0.0, "0"):
+        return 0
+    if value in (1, 1.0, "1"):
+        return 1
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return value
+
+
 def _plan_signature(plan):
-    """Return a stable signature for comparing DHW weekly plans."""
+    """Return a semantic per-day signature for comparing DHW weekly plans."""
     if not isinstance(plan, dict):
         return None
 
-    normalized = []
-    for day_plan in plan.get("plans", []):
-        days = tuple(sorted(day_plan.get("days", [])))
-        slices = tuple(
-            (item.get("from", 0), item.get("temp", 0))
-            for item in day_plan.get("slices", [])
-        )
-        normalized.append((days, slices))
+    plans = plan.get("plans", [])
+    if not isinstance(plans, list) or not plans:
+        return None
 
-    return tuple(sorted(normalized)) if normalized else None
+    default_temp = _normalize_temp_marker(plan.get("defaultTemp", 0))
+    per_day = {}
+
+    for day_plan in plans:
+        if not isinstance(day_plan, dict):
+            continue
+
+        raw_slices = day_plan.get("slices", [])
+        events = [(0, default_temp)]
+        for item in raw_slices:
+            if not isinstance(item, dict):
+                continue
+            try:
+                minute = int(item.get("from", 0))
+            except (TypeError, ValueError):
+                minute = 0
+            events.append(
+                (minute, _normalize_temp_marker(item.get("temp", default_temp)))
+            )
+
+        # Server/app versions may regroup identical days differently or emit
+        # redundant slices. Compare effective day timelines instead of raw JSON
+        # grouping so the same scenario keeps its name after a cloud refresh.
+        by_minute = {}
+        for minute, temp in sorted(events, key=lambda item: item[0]):
+            by_minute[minute] = temp
+
+        compact = []
+        for minute, temp in sorted(by_minute.items()):
+            if compact and compact[-1][1] == temp:
+                continue
+            compact.append((minute, temp))
+
+        day_signature = tuple(compact)
+        for day in day_plan.get("days", []):
+            try:
+                per_day[int(day)] = day_signature
+            except (TypeError, ValueError):
+                continue
+
+    if not per_day:
+        return None
+
+    # Include all seven days explicitly. Missing days use the default state.
+    default_day = ((0, default_temp),)
+    return tuple((day, per_day.get(day, default_day)) for day in range(7))
 
 
 class DhwScenarioManager:
