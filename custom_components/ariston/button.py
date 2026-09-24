@@ -54,7 +54,7 @@ class AristonSaveCurrentDhwScenario(AristonEntity, ButtonEntity):
 
     entity_description = AristonButtonEntityDescription(
         key="SaveCurrentDhwScenario",
-        name="Ariston DHW save current scenario",
+        name="Ariston DHW scenario save",
         icon="mdi:content-save",
         entity_category=EntityCategory.CONFIG,
     )
@@ -79,7 +79,7 @@ class AristonSaveCurrentHeatingScenario(AristonEntity, ButtonEntity):
     def __init__(self, coordinator, manager, zone: int) -> None:
         description = AristonButtonEntityDescription(
             key=f"SaveCurrentHeatingScenarioZone{zone}",
-            name=f"Ariston CH save current scenario zone {zone}",
+            name=f"Ariston CH scenario zone {zone} save",
             icon="mdi:content-save",
             entity_category=EntityCategory.CONFIG,
         )
