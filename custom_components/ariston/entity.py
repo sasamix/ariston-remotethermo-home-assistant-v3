@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC
 import logging
 
-from ariston.const import WheType
+from ariston.const import ConsumptionProperties, ThermostatProperties, WheType
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -18,6 +18,19 @@ from .const import (
 from .coordinator import DeviceDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
+
+# These entities existed before their display names were reorganized.  Their
+# unique IDs historically included the old display name, so keep that portion
+# stable to preserve the entity registry, entity_id and Recorder history.
+_LEGACY_UNIQUE_ID_NAMES = {
+    ConsumptionProperties.CURRENCY: "Ariston currency",
+    ConsumptionProperties.ELEC_COST: "Ariston elec cost",
+    ConsumptionProperties.GAS_COST: "Ariston gas cost",
+    ConsumptionProperties.GAS_TYPE: "Ariston gas type",
+    ConsumptionProperties.GAS_ENERGY_UNIT: "Ariston gas energy unit",
+    ThermostatProperties.HEATING_FLOW_TEMP: "Ariston heating flow temperature",
+    ThermostatProperties.HEATING_FLOW_OFFSET: "Ariston heating flow offset",
+}
 
 
 class AristonEntity(CoordinatorEntity, ABC):
@@ -82,8 +95,12 @@ class AristonEntity(CoordinatorEntity, ABC):
     @property
     def unique_id(self):
         """Return the unique id."""
+        unique_name = _LEGACY_UNIQUE_ID_NAMES.get(
+            self.entity_description.key,
+            self.name,
+        )
         return (
-            f"{self.device.gateway}-{self.name}-{self.zone}"
+            f"{self.device.gateway}-{unique_name}-{self.zone}"
             if self.zone
-            else f"{self.device.gateway}-{self.name}"
+            else f"{self.device.gateway}-{unique_name}"
         )
