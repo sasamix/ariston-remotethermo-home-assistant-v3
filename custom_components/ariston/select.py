@@ -76,12 +76,20 @@ class AristonHeatingScenarioSelect(AristonEntity, SelectEntity):
     def __init__(self, coordinator, manager, zone: int) -> None:
         description = AristonHeatingSelectEntityDescription(
             key=f"HeatingScenarioZone{zone}",
-            name=f"Ariston heating scenario zone {zone}",
+            name=f"Ariston CH heating scenario zone {zone}",
             icon="mdi:radiator",
             entity_category=EntityCategory.CONFIG,
         )
         super().__init__(coordinator, description, zone)
         self.manager = manager
+
+    @property
+    def unique_id(self) -> str:
+        """Keep the original unique id while changing display order/name."""
+        return (
+            f"{self.device.gateway}-"
+            f"Ariston heating scenario zone {self.zone}-{self.zone}"
+        )
 
     @property
     def current_option(self):
