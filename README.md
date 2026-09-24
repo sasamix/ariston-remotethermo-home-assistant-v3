@@ -62,6 +62,17 @@ Before changing the HACS source, create a normal Home Assistant backup. Then swi
 <h1 align="center">Peace Love Freedom</h1>
 
 
+
+## Language support
+
+Version **0.20.0** uses Home Assistant's native entity translation system.
+
+- English UI keeps the existing English entity names.
+- Russian UI shows Russian entity names and translated standard scenario/options labels.
+- User-defined scenario names are never translated or changed.
+- Legacy unique IDs are preserved, so switching languages does not recreate entities or detach Recorder history.
+
+
 ## Home Assistant-managed DHW scenario names
 
 The Ariston mobile app can keep user-defined scenario names locally on the phone while the
