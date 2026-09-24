@@ -85,12 +85,20 @@ class AristonHeatingScenarioName(AristonEntity, TextEntity):
     def __init__(self, coordinator, manager, zone: int) -> None:
         description = AristonTextEntityDescription(
             key=f"HeatingScenarioNameZone{zone}",
-            name=f"Ariston heating scenario name zone {zone}",
+            name=f"Ariston CH heating scenario name zone {zone}",
             icon="mdi:form-textbox",
             entity_category=EntityCategory.CONFIG,
         )
         super().__init__(coordinator, description, zone)
         self.manager = manager
+
+    @property
+    def unique_id(self) -> str:
+        """Keep the original unique id while changing display order/name."""
+        return (
+            f"{self.device.gateway}-"
+            f"Ariston heating scenario name zone {self.zone}-{self.zone}"
+        )
 
     @property
     def native_value(self) -> str:
