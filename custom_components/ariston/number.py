@@ -63,10 +63,11 @@ class AristonNumber(AristonEntity, NumberEntity):
 
     @property
     def name(self):
-        """Return the name of the entity."""
-        if self.zone:
-            return f"{self.entity_description.name} {self.zone}"
-        return self.entity_description.name
+        """Return the translated entity name while preserving the zone suffix."""
+        base_name = super().name
+        if self.zone and base_name:
+            return f"{base_name} {self.zone}"
+        return base_name
 
     @property
     def native_value(self):
