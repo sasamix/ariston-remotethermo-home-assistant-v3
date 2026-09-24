@@ -112,6 +112,42 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         original_async_update_state = device.async_update_state
 
+        async def async_update_state_resilient():
+            """Update normal device state even if Ariston menuItems temporarily returns 500.
+
+            python-ariston-api fetches properties and menuItems together with
+            asyncio.gather().  A server-side menuItems failure therefore used to
+            discard an otherwise valid properties response and made the whole
+            config entry unavailable.  Retry the essential properties request
+            alone and keep the previous menuItems snapshot.
+            """
+            try:
+                return await original_async_update_state()
+            except Exception as err:
+                _LOGGER.warning(
+                    "Ariston full state update failed (%r); retrying essential properties only",
+                    err,
+                )
+
+                data = await device.api.async_get_properties(
+                    device.gw,
+                    device.features,
+                    device.language_tag,
+                    device.umsys,
+                )
+                if data is None:
+                    raise
+
+                device.data = data
+                # Preserve the last valid menu_items list. On first start the
+                # library initializes it to an empty list, which is safe.
+                device._update_state()
+
+                _LOGGER.warning(
+                    "Ariston state updated without menuItems; integration remains available"
+                )
+                return None
+
         async def async_update_dhw_program(notify=False):
             """Update only the DHW time program."""
             if device.system_type != SystemType.GALEVO:
@@ -193,7 +229,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         async def async_update_state_with_time_programs():
             """Update Ariston state plus DHW and heating weekly programs."""
-            result = await original_async_update_state()
+            result = await async_update_state_resilient()
             await async_update_dhw_program()
             await async_update_heating_programs()
             return result
