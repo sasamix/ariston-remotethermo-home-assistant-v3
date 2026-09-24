@@ -63,6 +63,11 @@ class AristonSaveCurrentDhwScenario(AristonEntity, ButtonEntity):
         super().__init__(coordinator, self.entity_description)
         self.manager = manager
 
+    @property
+    def unique_id(self) -> str:
+        """Keep the original unique id after moving the button into the DHW group."""
+        return f"{self.device.gateway}-Ariston save current DHW scenario"
+
     async def async_press(self) -> None:
         """Save the current cloud schedule under the text entity's draft name."""
         await self.manager.async_save_current(self.manager.draft_name)
