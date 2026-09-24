@@ -19,6 +19,21 @@ _LOGGER = logging.getLogger(__name__)
 HEATING_SCENARIO_MANAGERS = "heating_scenario_managers"
 _STORAGE_VERSION = 1
 
+_HEATING_SCENARIO_LABELS = {
+    "ru": {
+        "Всегда включен": "Всегда включен",
+        "Семья дома": "Семья дома",
+        "Полуденный": "Полуденный",
+        "Без обеденного перерыва": "Без обеденного перерыва",
+    },
+    "en": {
+        "Всегда включен": "Always on",
+        "Семья дома": "Family at home",
+        "Полуденный": "Midday",
+        "Без обеденного перерыва": "No lunch break",
+    },
+}
+
 # Ariston's mobile app uses the same logical Comfort/Economy weekly-plan
 # templates for heating zones.  User-defined names are learned directly in HA.
 HEATING_STANDARD_SCENARIOS = {
@@ -224,12 +239,38 @@ class HeatingScenarioManager:
         return extract_heating_plan(self.raw_program, self.zone)
 
     @property
+    def _language(self) -> str:
+        """Return the supported backend language used for scenario labels."""
+        language = (self.hass.config.language or "en").lower()
+        return "ru" if language.startswith("ru") else "en"
+
+    def _localized_builtin_name(self, canonical_name: str) -> str:
+        """Return the built-in heating scenario label for the active language."""
+        return _HEATING_SCENARIO_LABELS[self._language].get(
+            canonical_name, canonical_name
+        )
+
+    def _canonical_builtin_name(self, displayed_name: str) -> str | None:
+        """Resolve either localized or canonical built-in scenario name."""
+        if displayed_name in HEATING_STANDARD_SCENARIOS:
+            return displayed_name
+        for canonical_name, label in _HEATING_SCENARIO_LABELS[
+            self._language
+        ].items():
+            if displayed_name == label:
+                return canonical_name
+        return None
+
+    @property
     def options(self) -> list[str]:
-        """Return built-in and HA-defined heating scenario names."""
-        return list(HEATING_STANDARD_SCENARIOS) + [
-            name
-            for name in self.custom_scenarios
-            if name not in HEATING_STANDARD_SCENARIOS
+        """Return localized built-in and HA-defined heating scenario names."""
+        builtin_labels = [
+            self._localized_builtin_name(name)
+            for name in HEATING_STANDARD_SCENARIOS
+        ]
+        reserved = set(HEATING_STANDARD_SCENARIOS) | set(builtin_labels)
+        return builtin_labels + [
+            name for name in self.custom_scenarios if name not in reserved
         ]
 
     @property
@@ -241,7 +282,7 @@ class HeatingScenarioManager:
 
         for name, scenario in HEATING_STANDARD_SCENARIOS.items():
             if current_signature == _plan_signature(scenario):
-                return name
+                return self._localized_builtin_name(name)
 
         for name, scenario in self.custom_scenarios.items():
             if current_signature == _plan_signature(scenario):
@@ -324,7 +365,7 @@ class HeatingScenarioManager:
         name = (name or "").strip()
         if not name:
             raise ValueError("Heating scenario name must not be empty")
-        if name in HEATING_STANDARD_SCENARIOS:
+        if self._canonical_builtin_name(name) is not None:
             raise ValueError(
                 f"'{name}' is a built-in heating scenario name; choose another name"
             )
@@ -350,7 +391,12 @@ class HeatingScenarioManager:
 
     async def async_apply(self, name: str) -> None:
         """Apply a standard or HA-defined heating scenario through API v2."""
-        scenario = HEATING_STANDARD_SCENARIOS.get(name)
+        canonical_name = self._canonical_builtin_name(name)
+        scenario = (
+            HEATING_STANDARD_SCENARIOS.get(canonical_name)
+            if canonical_name is not None
+            else None
+        )
         if scenario is None:
             scenario = self.custom_scenarios.get(name)
         if scenario is None:
@@ -359,7 +405,7 @@ class HeatingScenarioManager:
         # For standard scenarios preserve metadata returned by this installation
         # and replace only the actual weekly slices.  Custom scenarios already
         # contain the exact payload previously read from this plant.
-        if name in HEATING_STANDARD_SCENARIOS:
+        if canonical_name is not None:
             current = self.current_plan or {}
             weekly_plan = deepcopy(current)
             weekly_plan["plans"] = deepcopy(scenario["plans"])
