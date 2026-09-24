@@ -172,9 +172,10 @@ class AristonHeatingZoneSensor(AristonEntity, SensorEntity):
             "comfort": "heating_comfort_temperature",
             "economy": "heating_economy_temperature",
         }[kind]
+        self._legacy_name = name
         description = AristonHeatingSensorEntityDescription(
             key=f"Heating{kind.title().replace('_', '')}Zone{zone}",
-            name=name,
+            name=None,
             translation_key=translation_key,
             translation_placeholders={"zone": str(zone)},
             icon=icon,
@@ -187,6 +188,11 @@ class AristonHeatingZoneSensor(AristonEntity, SensorEntity):
         super().__init__(coordinator, description, zone)
         self.manager = manager
         self.kind = kind
+
+    @property
+    def unique_id(self) -> str:
+        """Keep the pre-localization unique id."""
+        return f"{self.device.gateway}-{self._legacy_name}-{self.zone}"
 
     @property
     def native_value(self):
