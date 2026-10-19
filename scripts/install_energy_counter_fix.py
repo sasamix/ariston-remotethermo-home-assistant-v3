@@ -1,0 +1,96 @@
+"""Install only the energy-counter fix, preserving local changes and IDs."""
+
+import argparse
+from datetime import datetime
+import hashlib
+from pathlib import Path
+import re
+import shutil
+import tempfile
+from urllib.request import urlopen
+
+BASE_HASHES = {
+    "__init__.py": "1295e3d1750651d5f942924a42de9237ea589b48d1e125496da1fc9d2d0f34da",
+    "sensor.py": "308de546d8460969b0083bbf9f86388abde403b6f8ef9a3147553b891a7efb20",
+}
+FILES = (*BASE_HASHES, "energy_counter.py")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--ref", help="Full immutable GitHub commit SHA")
+    source.add_argument("--source-dir", type=Path, help="Local checkout (for testing)")
+    parser.add_argument("--config", type=Path, default=Path("/config"))
+    parser.add_argument("--check", action="store_true", help="Validate without writing")
+    args = parser.parse_args()
+    if args.ref and not re.fullmatch(r"[0-9a-f]{40}", args.ref):
+        raise SystemExit("Нужен полный SHA коммита из 40 символов.")
+    target = args.config / "custom_components/ariston"
+    if not (target / "manifest.json").is_file():
+        raise SystemExit(f"Интеграция не найдена: {target}")
+
+    replacements = {}
+    originals = {}
+    for name in FILES:
+        if args.source_dir:
+            data = (args.source_dir / "custom_components/ariston" / name).read_bytes()
+        else:
+            url = (
+                "https://raw.githubusercontent.com/sasamix/"
+                f"ariston-remotethermo-home-assistant-v3/{args.ref}/"
+                f"custom_components/ariston/{name}"
+            )
+            with urlopen(url, timeout=45) as response:
+                data = response.read()
+        compile(data, name, "exec")
+        path = target / name
+        old = path.read_bytes() if path.exists() else None
+        originals[name] = old
+        if old == data:
+            print(f"Уже установлен: {name}")
+            continue
+        digest = hashlib.sha256(old).hexdigest() if old is not None else None
+        expected = BASE_HASHES.get(name)
+        if digest != expected:
+            raise SystemExit(
+                f"ОСТАНОВКА: {name} отличается от проверенной основы.\n"
+                f"SHA256: {digest}\nНичего не изменено. Пришлите этот вывод."
+            )
+        replacements[name] = data
+    if not replacements:
+        print("Исправление уже установлено.")
+        return
+    if args.check:
+        print("Проверка пройдена. Файлы не изменены:", ", ".join(replacements))
+        return
+
+    backup = args.config / "ariston_backups" / datetime.now().strftime("energy_%Y%m%d_%H%M%S_%f")
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(target, backup)
+    print("Резервная копия:", backup)
+    written = []
+    try:
+        with tempfile.TemporaryDirectory(prefix=".energy-stage-", dir=target.parent) as staging:
+            for name, data in replacements.items():
+                path = Path(staging) / name
+                path.write_bytes(data)
+                path.chmod(0o644)
+            for name in replacements:
+                if (target / name).exists() and (target / name).read_bytes() != originals[name]:
+                    raise RuntimeError(f"{name} изменился во время установки")
+                (Path(staging) / name).replace(target / name)
+                written.append(name)
+    except BaseException:
+        for name in reversed(written):
+            if originals[name] is None:
+                (target / name).unlink(missing_ok=True)
+            else:
+                shutil.copy2(backup / name, target / name)
+        raise
+    print("Установлено:", ", ".join(replacements))
+    print("Версия и ID сохранены. Теперь перезапустите Home Assistant Core.")
+
+
+if __name__ == "__main__":
+    main()

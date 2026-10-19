@@ -33,6 +33,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util.unit_system import METRIC_SYSTEM
+from homeassistant.util import dt as dt_util
 
 from .const import (
     API_URL_SETTING,
@@ -442,6 +443,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 """Fetch Ariston's native asPhysicalUnit metering values."""
                 nonlocal web_logged_in
 
+                snapshot_started = dt_util.now()
+
                 if not web_logged_in:
                     await async_web_login()
 
@@ -503,6 +506,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     raise RuntimeError("R2 response has no data.asPhysicalUnit")
 
                 device.gas_physical_unit_data = physical
+                # Keep the explicit calendar kWh report too. API-v2's rolling
+                # arrays have no timestamps and cannot be used as counters.
+                snapshot_finished = dt_util.now()
+                kwh = result.get("data", {}).get("asKwh")
+                if (
+                    isinstance(kwh, dict)
+                    and snapshot_started.date() == snapshot_finished.date()
+                ):
+                    device.r2_kwh_data = kwh
+                    device.r2_kwh_snapshot_date = snapshot_finished.date()
+                # A request crossing local midnight is not a dated snapshot.
+                # Keep the preceding snapshot with its original date instead.
                 _LOGGER.info("Ariston native physical gas metering updated")
 
             async def async_update_energy_with_web_metering():

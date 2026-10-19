@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+from functools import partial
+import hashlib
 import logging
+
+from ariston import SystemType
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -16,6 +20,10 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature, UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
+from homeassistant.util.unit_conversion import EnergyConverter
 
 from .const import (
     ARISTON_SENSOR_TYPES,
@@ -27,6 +35,7 @@ from .const import (
 from .coordinator import DeviceDataUpdateCoordinator
 from .entity import AristonEntity
 from .heating_scenarios import HEATING_SCENARIO_MANAGERS
+from .energy_counter import ENERGY_SOURCES, EnergyCounter, calendar_total, nonnegative
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -57,8 +66,14 @@ async def async_setup_entry(
                 description.whe_types,
             )
         ):
+            sensor_type = (
+                AristonCalendarEnergySensor
+                if coordinator.device.system_type == SystemType.GALEVO
+                and description.key in ENERGY_SOURCES
+                else AristonSensor
+            )
             ariston_sensors.append(
-                AristonSensor(
+                sensor_type(
                     coordinator,
                     description,
                 )
@@ -328,3 +343,128 @@ class AristonSensor(AristonEntity, SensorEntity):
             return self.entity_description.get_last_reset(self)
 
         return None
+
+
+class AristonCalendarEnergySensor(AristonSensor, RestoreEntity):
+    """Existing GALEVO kWh entity backed by a persistent calendar counter.
+
+    Preserve the descriptor, unique_id, unit and state_class. In particular,
+    a first installation of this fix must not book the year's total as new
+    consumption. Recorder history is not rewritten by this migration.
+    """
+
+    def __init__(self, coordinator, description):
+        super().__init__(coordinator, description)
+        self._counter = None
+        self._store = None
+        self._source_available = False
+        self._restored_floor = 0.0
+
+    async def async_added_to_hass(self):
+        key = hashlib.sha256(self.unique_id.encode()).hexdigest()
+        self._store = Store(self.hass, 1, f"{DOMAIN}.energy_counter.{key}")
+        saved = await self._store.async_load()
+        old_state = await self.async_get_last_state()
+        if saved is None and (old_state is None or nonnegative(old_state.state) is None):
+            # The old AristonSensor did not implement RestoreEntity. Read its
+            # last numeric Recorder state during this one-time migration.
+            old_state = await self._async_migration_state()
+        initial = nonnegative(old_state.state) if old_state else None
+        if initial is not None:
+            initial = EnergyConverter.convert(
+                initial, old_state.attributes.get("unit_of_measurement", "kWh"), "kWh"
+            )
+        self._restored_floor = initial or 0.0
+        self._counter = EnergyCounter(saved, initial or 0.0)
+        if saved is None and old_state:
+            # Keep the old reset marker constant through migration. Changing
+            # it would tell Recorder to count the whole restored value again.
+            self._counter.last_reset = old_state.attributes.get("last_reset")
+        self._update_counter()
+        # Persist the baseline before this entity starts publishing states.
+        await self._store.async_save(self._counter.as_dict())
+        await super().async_added_to_hass()
+
+    async def _async_migration_state(self):
+        if "recorder" not in self.hass.config.components:
+            return None
+        from homeassistant.components.recorder import get_instance
+        from homeassistant.components.recorder.history import get_significant_states
+        from homeassistant.components.recorder.statistics import (
+            get_last_short_term_statistics, get_last_statistics,
+        )
+        from homeassistant.core import State
+
+        recorder = get_instance(self.hass)
+        states = await recorder.async_add_executor_job(partial(
+            get_significant_states, self.hass, dt_util.utcnow() - timedelta(days=1),
+            entity_ids=[self.entity_id], significant_changes_only=False,
+        ))
+        for state in reversed(states.get(self.entity_id, [])):
+            if nonnegative(state.state) is not None:
+                return state
+        # An entity may have been unavailable longer than the retained state
+        # history. Its last statistics state still anchors the existing sum.
+        for getter in (get_last_short_term_statistics, get_last_statistics):
+            result = await recorder.async_add_executor_job(
+                getter, self.hass, 1, self.entity_id, True, {"state", "last_reset"}
+            )
+            for row in result.get(self.entity_id, []):
+                if nonnegative(row.get("state")) is not None:
+                    reset = row.get("last_reset")
+                    attrs = {"unit_of_measurement": self.unit_of_measurement}
+                    if reset is not None:
+                        attrs["last_reset"] = dt_util.utc_from_timestamp(reset).isoformat()
+                    return State(self.entity_id, str(row["state"]), attrs)
+        return None
+
+    def _update_counter(self):
+        if self._counter is None:
+            return
+        payload = getattr(self.device, "r2_kwh_data", None)
+        snapshot_date = getattr(self.device, "r2_kwh_snapshot_date", None)
+        series, tabs = ENERGY_SOURCES[self.entity_description.key]
+        source = calendar_total(payload, series, tabs, snapshot_date)
+        self._source_available = source is not None
+        if source is None:
+            return
+        previous = calendar_total(payload, series, tabs, snapshot_date, previous_year=True)
+        before = self._counter.as_dict()
+        self._counter.update(source, snapshot_date.year, previous)
+        if self._counter.as_dict() != before and self._store is not None:
+            self._store.async_delay_save(self._counter.as_dict, 1)
+
+    def _handle_coordinator_update(self):
+        self._update_counter()
+        super()._handle_coordinator_update()
+
+    @property
+    def available(self):
+        return super().available and self._source_available
+
+    @property
+    def native_value(self):
+        if self._counter is None or self._counter.source is None:
+            return None
+        # Store and Recorder flush independently. After an abrupt shutdown,
+        # never publish less than the last visible value while the persisted
+        # source/output pair catches up. Do not raise the stored output alone:
+        # that would replay the difference on the next source update.
+        return max(self._counter.value, self._restored_floor)
+
+    @property
+    def last_reset(self):
+        if self._counter and self._counter.last_reset:
+            return dt_util.parse_datetime(self._counter.last_reset)
+        return None
+
+    @property
+    def extra_state_attributes(self):
+        attrs = dict(super().extra_state_attributes or {})
+        attrs["energy_counter_source"] = "R2 asKwh calendar reports"
+        if self._counter:
+            attrs["source_year"] = self._counter.year
+            attrs["source_total_kwh"] = self._counter.source
+        snapshot_date = getattr(self.device, "r2_kwh_snapshot_date", None)
+        attrs["source_snapshot_date"] = snapshot_date.isoformat() if snapshot_date else None
+        return attrs
