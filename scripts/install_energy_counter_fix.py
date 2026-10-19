@@ -18,8 +18,15 @@ PRIOR_LEGACY_INIT_HASH = '7dc0694632a7c310e2007fb7d455b48772489fbb7860bf7ef44875
 # Accept the exact Git blobs that were deployed from PR #5 immediately
 # before the boundary fix; reject any other local customizations.
 PRIOR_LIVE_BLOB_SHA1 = {
-    "sensor.py": "6cacbb68550f7ed3302207e08cd93bcd4499e12d",
-    "energy_counter.py": "319bac6591bfb3ab743d1a3c1b39df9737ccc4b4",
+    "sensor.py": {
+        "6cacbb68550f7ed3302207e08cd93bcd4499e12d",
+        "6bc21732ef07f67fedee75d90ad0673a9eaa9701",
+        "79e7b294f5d3fed03f7b088c6a8f015e10d08755",
+    },
+    "energy_counter.py": {
+        "319bac6591bfb3ab743d1a3c1b39df9737ccc4b4",
+        "0848e7ab1b6692868bc2b9f381b812de4cd58fa3",
+    },
 }
 FILES = (*BASE_HASHES, "energy_counter.py")
 LEGACY_INIT_HASH = "29d8217fa113a3b2eb4db3b7d85eaaa8526baed67c8aa034d0d94f89fa978dfe"
@@ -81,7 +88,7 @@ def main():
             ).hexdigest()
             if old is not None else None
         )
-        if digest not in accepted and blob_sha1 != PRIOR_LIVE_BLOB_SHA1.get(name):
+        if digest not in accepted and blob_sha1 not in PRIOR_LIVE_BLOB_SHA1.get(name, set()):
             raise SystemExit(
                 f"ОСТАНОВКА: {name} отличается от проверенной основы.\n"
                 f"SHA256: {digest}\nНичего не изменено. Пришлите этот вывод."
