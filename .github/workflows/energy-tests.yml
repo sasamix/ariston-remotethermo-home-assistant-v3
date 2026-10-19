@@ -1,0 +1,24 @@
+name: Ariston counter regression tests
+
+on:
+  push:
+    branches:
+      - fix/persistent-energy-counters
+  pull_request:
+    paths:
+      - "custom_components/ariston/**"
+      - "tests/**"
+      - ".github/workflows/energy-tests.yml"
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile integration source
+        run: python -m compileall -q custom_components/ariston
+      - name: Run accounting and lifecycle tests
+        run: python -m unittest discover -s tests -v
