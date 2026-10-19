@@ -347,6 +347,17 @@ class AristonGasEnergySensor(CoordinatorEntity, SensorEntity, RestoreEntity):
         return value
 
     @property
+    def available(self):
+        # A confirmed reading stays usable through temporary API/R2 failures.
+        # New entities still wait for the first actual R2 number.
+        return (
+            self._last_valid_value is not None
+            or nonnegative(
+                get_native_gas_energy_live_total(self.coordinator.device, self._series)
+            ) is not None
+        )
+
+    @property
     def extra_state_attributes(self):
         return {"last_r2_accepted_at": self._last_accepted_at}
 
