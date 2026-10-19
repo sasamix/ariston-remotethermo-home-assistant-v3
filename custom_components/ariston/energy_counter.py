@@ -103,7 +103,15 @@ class EnergyCounter:
         self.year = None
         self.last_reset = None
         self.daily = None
+        # Last successfully cross-checked API v2 / R2 interval, not the
+        # timestamp of the most recent (possibly unverified) HTTP response.
+        self.source_interval_end = None
+        self.source_snapshot_date = None
         if isinstance(saved, dict):
+            if isinstance(saved.get("source_interval_end"), str):
+                self.source_interval_end = saved["source_interval_end"]
+            if isinstance(saved.get("source_snapshot_date"), str):
+                self.source_snapshot_date = saved["source_snapshot_date"]
             if isinstance(saved.get("daily"), dict):
                 self.daily = dict(saved["daily"])
             value = nonnegative(saved.get("value"))
@@ -172,12 +180,21 @@ class EnergyCounter:
         self.year = date.fromisoformat(ordered[-1]).year
         return True
 
+    def mark_verified_period(self, api_time, snapshot_date):
+        """Record the source period only after a valid, aligned cross-check."""
+        self.source_interval_end = api_time.replace(
+            hour=(api_time.hour // 2) * 2, minute=0, second=0, microsecond=0
+        ).isoformat()
+        self.source_snapshot_date = snapshot_date.isoformat()
+
     def as_dict(self):
         return {
             "value": self.value,
             "source": self.source,
             "year": self.year,
             "last_reset": self.last_reset,
+            "source_interval_end": self.source_interval_end,
+            "source_snapshot_date": self.source_snapshot_date,
             **({"daily": dict(self.daily)} if self.daily is not None else {}),
         }
 
