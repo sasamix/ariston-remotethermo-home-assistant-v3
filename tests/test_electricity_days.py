@@ -95,9 +95,44 @@ class ElectricTests(unittest.TestCase):
             self.assertTrue(sensor.available); self.assertEqual(sensor.native_value,.077)
             sensor._handle_coordinator_update(); self.assertEqual(sensor.native_value,.077)
             self.assertEqual(sensor.extra_state_attributes['source_through_date'],'2026-10-19')
-            device.energy_sequences_date=date(2026,10,20)
-            sensor._handle_coordinator_update(); self.assertFalse(sensor.available)
+            verified = sensor.extra_state_attributes
+            self.assertEqual(verified['source_interval_end'], '2026-10-19T12:00:00')
+            self.assertEqual(verified['source_snapshot_date'], '2026-10-19')
+
+            # The R2 two-minute poll has rolled into the 14:00–16:00 block,
+            # but the separate API-v2 poll still reports the 12:00 block.
+            device.r2_kwh_snapshot_time=datetime(2026,10,19,14,1)
+            sensor._handle_coordinator_update()
+            self.assertTrue(sensor.available)
             self.assertEqual(sensor.native_value,.077)
+            self.assertEqual(sensor.extra_state_attributes['source_interval_end'],
+                             verified['source_interval_end'])
+
+            # Even an inconsistent date (e.g. around midnight) must hold
+            # the confirmed reading and its original source timestamp.
+            device.energy_sequences_date=date(2026,10,20)
+            sensor._handle_coordinator_update()
+            self.assertTrue(sensor.available)
+            self.assertEqual(sensor.native_value,.077)
+            self.assertEqual(sensor.extra_state_attributes['source_snapshot_date'],
+                             verified['source_snapshot_date'])
+
+            # The source timestamp survives a new instance / Store reload.
+            restarted=Sensor(SimpleNamespace(device=device),SimpleNamespace(key=KEY))
+            await restarted.async_added_to_hass()
+            self.assertTrue(restarted.available)
+            self.assertEqual(restarted.native_value,.077)
+            self.assertEqual(restarted.extra_state_attributes['source_interval_end'],
+                             verified['source_interval_end'])
+
+            # When the two sources agree again, the sensor remains available.
+            device.energy_sequences_date=date(2026,10,19)
+            device.r2_kwh_snapshot_time=datetime(2026,10,19,12,45)
+            restarted._handle_coordinator_update()
+            self.assertTrue(restarted.available)
+            self.assertEqual(restarted.native_value,.077)
+            self.assertEqual(restarted.extra_state_attributes['source_interval_end'],
+                             verified['source_interval_end'])
         asyncio.run(run())
 
 
