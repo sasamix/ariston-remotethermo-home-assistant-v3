@@ -514,7 +514,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 if (
                     isinstance(kwh, dict)
                     and snapshot_started.date() == snapshot_finished.date()
+                    and snapshot_started.hour // 2 == snapshot_finished.hour // 2
                 ):
+                    device.r2_kwh_snapshot_time = snapshot_finished
                     device.r2_kwh_raw = result.get("data", {}).get("asKwhRaw")
                     device.r2_kwh_data = kwh
                     device.r2_kwh_snapshot_date = snapshot_finished.date()
@@ -527,9 +529,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 api_started = dt_util.now()
                 result = await original_async_update_energy()
                 api_finished = dt_util.now()
-                if api_started.date() == api_finished.date():
+                if (api_started.date() == api_finished.date()
+                        and api_started.hour // 2 == api_finished.hour // 2):
                     device.energy_sequences_snapshot = deepcopy(device.consumptions_sequences)
                     device.energy_sequences_date = api_finished.date()
+                    device.energy_sequences_time = api_finished
 
 
                 try:

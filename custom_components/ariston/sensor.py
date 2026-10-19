@@ -35,7 +35,7 @@ from .const import (
 from .coordinator import DeviceDataUpdateCoordinator
 from .entity import AristonEntity
 from .heating_scenarios import HEATING_SCENARIO_MANAGERS
-from .energy_counter import ENERGY_SOURCES, DAILY_KEYS, EnergyCounter, calendar_total, electricity_days, nonnegative
+from .energy_counter import ENERGY_SOURCES, DAILY_KEYS, EnergyCounter, calendar_total, electricity_periods, nonnegative
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -427,11 +427,14 @@ class AristonCalendarEnergySensor(AristonSensor, RestoreEntity):
         before = self._counter.as_dict()
         if self.entity_description.key in DAILY_KEYS:
             api_date = getattr(self.device, "energy_sequences_date", None)
-            days = electricity_days(
+            api_time = getattr(self.device, "energy_sequences_time", None)
+            r2_time = getattr(self.device, "r2_kwh_snapshot_time", None)
+            days = electricity_periods(
                 getattr(self.device, "energy_sequences_snapshot", None),
                 getattr(self.device, "r2_kwh_raw", None),
-                api_date, self.entity_description.key,
-            ) if api_date == snapshot_date else None
+                api_time, self.entity_description.key,
+            ) if (api_date == snapshot_date and api_time and r2_time
+                  and api_time.hour // 2 == r2_time.hour // 2) else None
             self._source_available = bool(days) and self._counter.update_days(days)
         else:
             source = calendar_total(payload, series, tabs, snapshot_date)
@@ -472,11 +475,16 @@ class AristonCalendarEnergySensor(AristonSensor, RestoreEntity):
         attrs = dict(super().extra_state_attributes or {})
         daily = self.entity_description.key in DAILY_KEYS
         attrs["energy_counter_source"] = (
-            "API v2 completed days verified against R2" if daily
+            "API v2 two-hour intervals verified against R2" if daily
             else "R2 asKwh calendar reports"
         )
         if daily and self._counter and self._counter.daily:
             attrs["source_through_date"] = max(self._counter.daily)
+            stamp = getattr(self.device, "energy_sequences_time", None)
+            attrs["source_interval_end"] = (
+                stamp.replace(hour=(stamp.hour // 2) * 2, minute=0, second=0, microsecond=0).isoformat()
+                if stamp else None
+            )
         if self._counter:
             attrs["source_year"] = self._counter.year
             attrs["source_total_kwh"] = self._counter.source

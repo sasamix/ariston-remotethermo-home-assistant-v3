@@ -17,7 +17,13 @@ Unsupported layouts or mismatched snapshots remain unavailable, not zero.
 
 ## Accounting
 
-Electricity and combined gas-plus-electricity entities track completed days.
+Electricity and combined gas-plus-electricity entities track completed days
+plus today's completed two-hour intervals. API-v2 p=1 contains 24 rolling
+two-hour buckets. Its gas channels match all 12 PreviousDay R2 buckets and
+today's completed buckets. At 12:31 on October 19 the electricity totals for
+today are 0.165 kWh heating and 0.027 kWh DHW. Both snapshot requests must
+complete in the same local two-hour block. The parser fails closed for a
+different bucket layout or label format.
 Each day's high-water mark is persisted with the counter. Repeated polls and
 restarts add nothing; new days and upward corrections add only their delta.
 A downward correction and recovery do not re-add previously counted usage.
@@ -34,17 +40,20 @@ unchanged. Storage and Recorder statistics are not deleted or rewritten.
 
 ## Limits
 
-This is daily accounting: today's electricity is added after the cloud returns
-that completed day. HA records that increment at arrival time, not retroactively
-in yesterday's hourly statistics. This patch does not repair historical Energy
+The shortest verified source period is two hours. Counters advance when API-v2
+returns a new completed interval, using the configured energy poll cadence.
+HA records the increment at receipt time, not retroactively in the original
+interval's hourly statistics. This patch does not repair historical Energy
 statistics or provide an instantaneous electricity meter. Cloud catch-up and
 upward revisions similarly appear at receipt time. The HA local calendar must
 match the boiler reporting calendar.
 
-Electricity's `source_through_date` identifies the last completed day processed.
+Electricity's `source_through_date` identifies the last date processed, including
+the partial current day. `source_interval_end` identifies the end of the latest
+completed two-hour block.
 `source_total_kwh` for these daily counters is the accumulated increment since
 baseline, not an annual electricity total. `energy_counter_source` identifies
-`API v2 completed days verified against R2`.
+`API v2 two-hour intervals verified against R2`.
 
 ## Installation and verification
 
@@ -59,4 +68,5 @@ month/year transitions, gaps, mismatch rejection and actual sensor lifecycle
 with HA doubles. Installation was checked against both previous patched bases.
 Live-device validation is still required after restarting HA Core. Verify the
 existing electricity entities become available and source_through_date is the
-last completed day. No new entity IDs should appear.
+current date and source_interval_end matches the completed two-hour boundary.
+No new entity IDs should appear.

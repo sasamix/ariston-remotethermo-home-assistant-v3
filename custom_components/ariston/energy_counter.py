@@ -257,3 +257,60 @@ def electricity_days(sequences, raw, snapshot_date, key):
     return {(first + timedelta(days=i)).isoformat():
             round(sum(arrays[k][i] for k in DAILY_KEYS[key]), 6)
             for i in range(count)}
+
+
+def electricity_periods(sequences, raw, snapshot_time, key):
+    """Add today's completed two-hour intervals to verified completed days.
+
+    GALEVO p=1 is a 24-bucket rolling sequence, not 24 clock-hour values.
+    Anchor its last buckets to the request's local two-hour boundary and
+    verify both gas channels against R2 PreviousDay and CurrentDay labels.
+    Keep one high-water mark per date so the eventual daily report replaces
+    today's partial report without counting its intervals a second time.
+    """
+    if snapshot_time is None or not hasattr(snapshot_time, 'hour'):
+        return None
+    days = electricity_days(sequences, raw, snapshot_time.date(), key)
+    if days is None:
+        return None
+    count = snapshot_time.hour // 2
+    arrays = {}
+    for row in sequences:
+        if not isinstance(row, dict) or row.get('p') != 1 or row.get('k') not in (7,10,20,21):
+            continue
+        k = row['k']
+        values = row.get('v')
+        if k in arrays or not isinstance(values, list) or len(values) != 24:
+            return None
+        arrays[k] = [nonnegative(v) for v in values]
+        if any(v is None for v in arrays[k]):
+            return None
+    if set(arrays) != {7,10,20,21}:
+        return None
+    labels = ['12-02 AM','02-04 AM','04-06 AM','06-08 AM','08-10 AM','10-12 PM',
+              '12-02 PM','02-04 PM','04-06 PM','06-08 PM','08-10 PM','10-12 AM']
+    for k, series in ((7,'Heating'),(10,'Dhw')):
+        for period in ('PreviousDay','CurrentDay'):
+            reports = [r for r in raw.get('histogramData', []) if isinstance(r,dict)
+                       and r.get('tab') == 'ConsumedGas' and r.get('series') == series
+                       and r.get('period') == period]
+            if len(reports) != 1:
+                return None
+            items = reports[0].get('items')
+            if not isinstance(items,list) or len(items) != 12:
+                return None
+            if [r.get('x') for r in items if isinstance(r,dict)] != labels:
+                return None
+            expected = [nonnegative(r.get('y')) for r in items]
+            if any(v is None for v in expected):
+                return None
+            actual = (arrays[k][-count:] if count else []) if period == 'CurrentDay' else arrays[k][12-count:24-count]
+            for index, value in enumerate(actual):
+                if abs(value - expected[index]) > .005:
+                    return None
+            if period == 'CurrentDay' and any(v > .005 for v in expected[count:]):
+                return None  # Cloud is ahead of the proposed date/interval anchor.
+    days[snapshot_time.date().isoformat()] = round(
+        sum(sum(arrays[k][-count:]) for k in DAILY_KEYS[key]), 6
+    ) if count else 0.0
+    return days

@@ -61,7 +61,7 @@ node = next(n for n in ast.parse(source).body if isinstance(n, ast.ClassDef) and
 namespace = {
     "AristonSensor": BaseSensor, "RestoreEntity": Restore, "Store": Storage,
     "ENERGY_SOURCES": module.ENERGY_SOURCES, "EnergyCounter": EnergyCounter,
-    "DAILY_KEYS": module.DAILY_KEYS, "electricity_days": module.electricity_days,
+    "DAILY_KEYS": module.DAILY_KEYS, "electricity_periods": module.electricity_periods,
     "calendar_total": calendar_total, "nonnegative": module.nonnegative,
     "DOMAIN": "ariston", "hashlib": hashlib, "partial": partial, "timedelta": timedelta,
     "dt_util": SimpleNamespace(parse_datetime=datetime.fromisoformat),
