@@ -569,6 +569,25 @@ class AristonCalendarEnergySensor(AristonSensor, RestoreEntity):
             if self._counter.daily:
                 attrs["source_through_date"] = max(self._counter.daily)
             attrs["source_interval_end"] = self._counter.source_interval_end
+
+            # Diagnostics: show both independently refreshed source times
+            # without replacing the stored time of the last accepted reading.
+            api_time = getattr(self.device, "energy_sequences_time", None)
+            r2_time = getattr(self.device, "r2_kwh_snapshot_time", None)
+            attrs["api_v2_snapshot_time"] = (
+                api_time.isoformat() if api_time else None
+            )
+            attrs["r2_snapshot_time"] = (
+                r2_time.isoformat() if r2_time else None
+            )
+            aligned = bool(
+                api_time and r2_time
+                and api_time.date() == r2_time.date()
+                and api_time.hour // 2 == r2_time.hour // 2
+            )
+            attrs["source_sync_status"] = (
+                "aligned" if aligned else "waiting_for_matching_api_v2_and_r2"
+            )
         if self._counter:
             attrs["source_year"] = self._counter.year
             attrs["source_total_kwh"] = self._counter.source
