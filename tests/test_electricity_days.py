@@ -107,6 +107,12 @@ class ElectricTests(unittest.TestCase):
             self.assertEqual(sensor.native_value,.077)
             self.assertEqual(sensor.extra_state_attributes['source_interval_end'],
                              verified['source_interval_end'])
+            self.assertEqual(sensor.extra_state_attributes['source_sync_status'],
+                             'waiting_for_matching_api_v2_and_r2')
+            self.assertEqual(sensor.extra_state_attributes['api_v2_snapshot_time'],
+                             '2026-10-19T12:31:00')
+            self.assertEqual(sensor.extra_state_attributes['r2_snapshot_time'],
+                             '2026-10-19T14:01:00')
 
             # Even an inconsistent date (e.g. around midnight) must hold
             # the confirmed reading and its original source timestamp.
