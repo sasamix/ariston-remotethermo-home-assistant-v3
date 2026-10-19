@@ -429,20 +429,42 @@ class AristonCalendarEnergySensor(AristonSensor, RestoreEntity):
             api_date = getattr(self.device, "energy_sequences_date", None)
             api_time = getattr(self.device, "energy_sequences_time", None)
             r2_time = getattr(self.device, "r2_kwh_snapshot_time", None)
-            days = electricity_periods(
-                getattr(self.device, "energy_sequences_snapshot", None),
-                getattr(self.device, "r2_kwh_raw", None),
-                api_time, self.entity_description.key,
-            ) if (api_date == snapshot_date and api_time and r2_time
-                  and api_time.hour // 2 == r2_time.hour // 2) else None
-            self._source_available = bool(days) and self._counter.update_days(days)
+
+            # R2 and API v2 are polled independently. At a two-hour boundary
+            # R2 may already be in the new bucket while API v2 is still in the
+            # previous one. This means "not verified yet", NOT "unavailable".
+            aligned = (
+                api_date == snapshot_date
+                and api_time is not None
+                and r2_time is not None
+                and api_time.hour // 2 == r2_time.hour // 2
+            )
+            if aligned:
+                days = electricity_periods(
+                    getattr(self.device, "energy_sequences_snapshot", None),
+                    getattr(self.device, "r2_kwh_raw", None),
+                    api_time, self.entity_description.key,
+                )
+                if days and self._counter.update_days(days):
+                    # These timestamps belong to the accepted reading, not
+                    # the latest unverified response. Persist both with it.
+                    self._counter.mark_verified_period(api_time, snapshot_date)
+
+            # Keep the previously verified reading visible while waiting for
+            # both sources to report the same complete two-hour period.
+            self._source_available = (
+                bool(self._counter.daily) and self._counter.source is not None
+            )
         else:
             source = calendar_total(payload, series, tabs, snapshot_date)
-            self._source_available = source is not None
-            if source is None:
-                return
-            previous = calendar_total(payload, series, tabs, snapshot_date, previous_year=True)
-            self._counter.update(source, snapshot_date.year, previous)
+            if source is not None:
+                previous = calendar_total(
+                    payload, series, tabs, snapshot_date, previous_year=True
+                )
+                self._counter.update(source, snapshot_date.year, previous)
+            # A temporary missing/stale R2 report must not hide a counter
+            # whose previously confirmed source is already persisted.
+            self._source_available = self._counter.source is not None
         if self._counter.as_dict() != before and self._store is not None:
             self._store.async_delay_save(self._counter.as_dict, 1)
 
@@ -452,7 +474,10 @@ class AristonCalendarEnergySensor(AristonSensor, RestoreEntity):
 
     @property
     def available(self):
-        return super().available and self._source_available
+        # A transient coordinator failure or an R2/API-v2 polling mismatch
+        # must not turn an already verified, persisted energy value unavailable.
+        # An unverified first reading stays unavailable until validated.
+        return self._source_available
 
     @property
     def native_value(self):
@@ -478,16 +503,17 @@ class AristonCalendarEnergySensor(AristonSensor, RestoreEntity):
             "API v2 two-hour intervals verified against R2" if daily
             else "R2 asKwh calendar reports"
         )
-        if daily and self._counter and self._counter.daily:
-            attrs["source_through_date"] = max(self._counter.daily)
-            stamp = getattr(self.device, "energy_sequences_time", None)
-            attrs["source_interval_end"] = (
-                stamp.replace(hour=(stamp.hour // 2) * 2, minute=0, second=0, microsecond=0).isoformat()
-                if stamp else None
-            )
+        if daily and self._counter:
+            if self._counter.daily:
+                attrs["source_through_date"] = max(self._counter.daily)
+            attrs["source_interval_end"] = self._counter.source_interval_end
         if self._counter:
             attrs["source_year"] = self._counter.year
             attrs["source_total_kwh"] = self._counter.source
         snapshot_date = getattr(self.device, "r2_kwh_snapshot_date", None)
-        attrs["source_snapshot_date"] = snapshot_date.isoformat() if snapshot_date else None
+        attrs["source_snapshot_date"] = (
+            self._counter.source_snapshot_date
+            if daily and self._counter
+            else snapshot_date.isoformat() if snapshot_date else None
+        )
         return attrs
