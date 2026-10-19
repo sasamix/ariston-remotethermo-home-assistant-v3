@@ -18,10 +18,14 @@ PRIOR_LEGACY_INIT_HASH = '7dc0694632a7c310e2007fb7d455b48772489fbb7860bf7ef44875
 # Accept the exact Git blobs that were deployed from PR #5 immediately
 # before the boundary fix; reject any other local customizations.
 PRIOR_LIVE_BLOB_SHA1 = {
+    "__init__.py": {
+        "dab2c882ac078fcd86555fd7a118074a1ee50629",
+    },
     "sensor.py": {
         "6cacbb68550f7ed3302207e08cd93bcd4499e12d",
         "6bc21732ef07f67fedee75d90ad0673a9eaa9701",
         "79e7b294f5d3fed03f7b088c6a8f015e10d08755",
+        "ef98bba3870c29cdc0ef7abce5df07377c20a4eb",
     },
     "energy_counter.py": {
         "319bac6591bfb3ab743d1a3c1b39df9737ccc4b4",
