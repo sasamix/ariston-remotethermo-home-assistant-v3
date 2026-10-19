@@ -135,6 +135,21 @@ class CounterTests(unittest.TestCase):
         self.assertFalse(counter.update(None, 2026))
         self.assertEqual(counter.source, 100)
 
+    def test_verified_source_timestamp_survives_restart(self):
+        from datetime import datetime
+        counter = EnergyCounter(initial_value=0.077)
+        self.assertTrue(counter.update_days({"2026-10-18": 0.2, "2026-10-19": 0.1}))
+        counter.mark_verified_period(datetime(2026, 10, 19, 15, 52),
+                                     date(2026, 10, 19))
+        before = counter.as_dict()
+        restored = EnergyCounter(before)
+        self.assertEqual(restored.source_interval_end, "2026-10-19T14:00:00")
+        self.assertEqual(restored.source_snapshot_date, "2026-10-19")
+        self.assertEqual(restored.value, 0.077)
+        # A failed verification leaves both the stored reading and its time.
+        self.assertFalse(restored.update_days(None))
+        self.assertEqual(restored.as_dict(), before)
+
 
 if __name__ == "__main__":
     unittest.main()
