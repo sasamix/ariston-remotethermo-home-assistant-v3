@@ -15,6 +15,12 @@ BASE_HASHES = {
 }
 PRIOR_PATCH_HASHES = {'__init__.py': 'ad8ffb0b608287c328c6bf76f286f1a35736f496782faf7e538eb04a82fbbe89', 'sensor.py': 'c19ac2472e1ae57bf9e9018a36923922c0f82680f776d0eeaedd0e86cc177da5', 'energy_counter.py': '3d5c79aaa8b6b04315d93cd2a49071f71c7e7da3ab9550d0639d6648c6d02080'}
 PRIOR_LEGACY_INIT_HASH = '7dc0694632a7c310e2007fb7d455b48772489fbb7860bf7ef44875d66894707b'
+# Accept the exact Git blobs that were deployed from PR #5 immediately
+# before the boundary fix; reject any other local customizations.
+PRIOR_LIVE_BLOB_SHA1 = {
+    "sensor.py": "6cacbb68550f7ed3302207e08cd93bcd4499e12d",
+    "energy_counter.py": "319bac6591bfb3ab743d1a3c1b39df9737ccc4b4",
+}
 FILES = (*BASE_HASHES, "energy_counter.py")
 LEGACY_INIT_HASH = "29d8217fa113a3b2eb4db3b7d85eaaa8526baed67c8aa034d0d94f89fa978dfe"
 LEGACY_INIT_BLOCK = b'        # 0.20.1 incorrectly disabled the two existing System heating-flow\n        # numbers. Undo that migration before their platform is set up, while\n        # respecting any entries the user explicitly disabled.\n        registry = er.async_get(hass)\n        for zone in device.zone_numbers:\n            for label in ("temperature", "offset"):\n                unique_id = (\n                    f"{device.gateway}-Ariston System heating flow "\n                    f"{label} {zone}-{zone}"\n                )\n                entity_id = registry.async_get_entity_id("number", DOMAIN, unique_id)\n                registered = registry.async_get(entity_id) if entity_id else None\n                if (\n                    registered\n                    and registered.config_entry_id == entry.entry_id\n                    and registered.disabled_by == er.RegistryEntryDisabler.INTEGRATION\n                ):\n                    registry.async_update_entity(entity_id, disabled_by=None)\n\n'
@@ -69,7 +75,13 @@ def main():
         accepted = {expected, PRIOR_PATCH_HASHES.get(name)}
         if name == "__init__.py":
             accepted.update({LEGACY_INIT_HASH, PRIOR_LEGACY_INIT_HASH})
-        if digest not in accepted:
+        blob_sha1 = (
+            hashlib.sha1(
+                b"blob " + str(len(old)).encode("ascii") + b"\\x00" + old
+            ).hexdigest()
+            if old is not None else None
+        )
+        if digest not in accepted and blob_sha1 != PRIOR_LIVE_BLOB_SHA1.get(name):
             raise SystemExit(
                 f"ОСТАНОВКА: {name} отличается от проверенной основы.\n"
                 f"SHA256: {digest}\nНичего не изменено. Пришлите этот вывод."
