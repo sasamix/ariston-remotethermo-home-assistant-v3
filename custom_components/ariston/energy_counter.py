@@ -1,13 +1,13 @@
-"""Calendar-based kWh counters, independent of Home Assistant and API polling.
+"""Persistent kWh accounting from verified, non-overlapping source periods.
 
-The API-v2 v[-1] value is an interval sample, not a meter reading. Use the
-R2 asKwh calendar histograms instead. Never add overlapping day/month/year
-reports, nor sum a rolling window into a lifetime counter.
+Gas uses R2 calendar totals. Electricity and combined energy use API-v2
+completed days, dated and cross-checked against the independent R2 report.
 """
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
+import calendar
 import math
 
 
@@ -102,7 +102,10 @@ class EnergyCounter:
         self.source = None
         self.year = None
         self.last_reset = None
+        self.daily = None
         if isinstance(saved, dict):
+            if isinstance(saved.get("daily"), dict):
+                self.daily = dict(saved["daily"])
             value = nonnegative(saved.get("value"))
             source = nonnegative(saved.get("source"))
             year = saved.get("year")
@@ -141,10 +144,116 @@ class EnergyCounter:
         self.year = year
         return True
 
+    def update_days(self, days):
+        """Persist day high-water marks; never add the same interval twice."""
+        if not days:
+            return False
+        ordered = sorted(days)
+        if self.daily is None:
+            # Preserve the previously displayed value; establish a baseline.
+            self.daily = dict(days)
+            self.source = 0.0
+        else:
+            last = max(self.daily)
+            if ordered[-1] < last:
+                return False
+            if date.fromisoformat(ordered[0]) > date.fromisoformat(last) + timedelta(days=1):
+                return False  # Cannot recover a gap outside the retained report.
+            delta = 0.0
+            for day in ordered:
+                if day in self.daily:
+                    delta += max(0.0, days[day] - self.daily[day])
+                elif day > last:
+                    delta += days[day]
+            self.value = round(self.value + delta, 6)
+            self.source = round((self.source or 0.0) + delta, 6)
+            self.daily = {day: max(value, self.daily.get(day, 0.0))
+                          for day, value in days.items()}
+        self.year = date.fromisoformat(ordered[-1]).year
+        return True
+
     def as_dict(self):
         return {
             "value": self.value,
             "source": self.source,
             "year": self.year,
             "last_reset": self.last_reset,
+            **({"daily": dict(self.daily)} if self.daily is not None else {}),
         }
+
+
+DAILY_KEYS = {
+    "Central heating electricity consumption": (20,),
+    "Domestic hot water electricity consumption": (21,),
+    "Central heating total energy consumption": (7, 20),
+    "Domestic hot water total energy consumption": (10, 21),
+}
+
+
+def electricity_days(sequences, raw, snapshot_date, key):
+    """Date API-v2 completed-day arrays only after matching R2 calendar data.
+
+    Observed GALEVO p=3 covers the previous month and completed current days.
+    Reject a different layout rather than guessing dates. R2 boilerElectricity
+    independently verifies the split electricity sums for both months.
+    """
+    if not isinstance(snapshot_date, date) or not isinstance(raw, dict):
+        return None
+    if not isinstance(sequences, list) or key not in DAILY_KEYS:
+        return None
+    first_current = snapshot_date.replace(day=1)
+    last_previous = first_current - timedelta(days=1)
+    first = last_previous.replace(day=1)
+    previous_count = calendar.monthrange(last_previous.year, last_previous.month)[1]
+    count = previous_count + snapshot_date.day - 1
+    arrays = {}
+    for row in sequences:
+        if not isinstance(row, dict) or row.get("p") != 3 or row.get("k") not in (7, 10, 20, 21):
+            continue
+        k = row["k"]
+        values = row.get("v")
+        if k in arrays or not isinstance(values, list) or len(values) != count:
+            return None
+        values = [nonnegative(v) for v in values]
+        if any(v is None for v in values):
+            return None
+        arrays[k] = values
+    if set(arrays) != {7, 10, 20, 21}:
+        return None
+    totals = raw.get("boilerElectricity")
+    if not isinstance(totals, list):
+        return None
+    for period, section in (("PreviousMonth", slice(0, previous_count)),
+                            ("CurrentMonth", slice(previous_count, None))):
+        matches = [r for r in totals if isinstance(r, dict) and r.get("period") == period]
+        if len(matches) != 1:
+            return None
+        expected = nonnegative(matches[0].get("value"))
+        actual = sum(arrays[20][section]) + sum(arrays[21][section])
+        if expected is None or abs(actual - expected) > 0.005:
+            return None
+        # Date anchors: every gas day must match the explicitly dated R2 report.
+        for k, series in ((7, "Heating"), (10, "Dhw")):
+            reports = [r for r in raw.get("histogramData", []) if isinstance(r, dict)
+                       and r.get("tab") == "ConsumedGas" and r.get("series") == series
+                       and r.get("period") == period]
+            if len(reports) != 1:
+                return None
+            items = reports[0].get("items")
+            if not isinstance(items, list):
+                return None
+            days = {}
+            for item in items:
+                if not isinstance(item, dict):
+                    return None
+                label = str(item.get("x"))
+                if label in days:
+                    return None
+                days[label] = nonnegative(item.get("y"))
+            for index, value in enumerate(arrays[k][section], 1):
+                expected = days.get(str(index))
+                if expected is None or abs(value - expected) > 0.005:
+                    return None
+    return {(first + timedelta(days=i)).isoformat():
+            round(sum(arrays[k][i] for k in DAILY_KEYS[key]), 6)
+            for i in range(count)}

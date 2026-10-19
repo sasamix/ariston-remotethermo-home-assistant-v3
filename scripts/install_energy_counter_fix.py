@@ -13,6 +13,8 @@ BASE_HASHES = {
     "__init__.py": "1295e3d1750651d5f942924a42de9237ea589b48d1e125496da1fc9d2d0f34da",
     "sensor.py": "308de546d8460969b0083bbf9f86388abde403b6f8ef9a3147553b891a7efb20",
 }
+PRIOR_PATCH_HASHES = {'__init__.py': 'ad8ffb0b608287c328c6bf76f286f1a35736f496782faf7e538eb04a82fbbe89', 'sensor.py': 'c19ac2472e1ae57bf9e9018a36923922c0f82680f776d0eeaedd0e86cc177da5', 'energy_counter.py': '3d5c79aaa8b6b04315d93cd2a49071f71c7e7da3ab9550d0639d6648c6d02080'}
+PRIOR_LEGACY_INIT_HASH = '7dc0694632a7c310e2007fb7d455b48772489fbb7860bf7ef44875d66894707b'
 FILES = (*BASE_HASHES, "energy_counter.py")
 LEGACY_INIT_HASH = "29d8217fa113a3b2eb4db3b7d85eaaa8526baed67c8aa034d0d94f89fa978dfe"
 LEGACY_INIT_BLOCK = b'        # 0.20.1 incorrectly disabled the two existing System heating-flow\n        # numbers. Undo that migration before their platform is set up, while\n        # respecting any entries the user explicitly disabled.\n        registry = er.async_get(hass)\n        for zone in device.zone_numbers:\n            for label in ("temperature", "offset"):\n                unique_id = (\n                    f"{device.gateway}-Ariston System heating flow "\n                    f"{label} {zone}-{zone}"\n                )\n                entity_id = registry.async_get_entity_id("number", DOMAIN, unique_id)\n                registered = registry.async_get(entity_id) if entity_id else None\n                if (\n                    registered\n                    and registered.config_entry_id == entry.entry_id\n                    and registered.disabled_by == er.RegistryEntryDisabler.INTEGRATION\n                ):\n                    registry.async_update_entity(entity_id, disabled_by=None)\n\n'
@@ -56,7 +58,7 @@ def main():
             if data.count(SETUP_MARKER) != 1:
                 raise SystemExit("Неожиданная структура __init__.py; ничего не изменено")
             legacy_data = data.replace(SETUP_MARKER, LEGACY_INIT_BLOCK + SETUP_MARKER, 1)
-            if old == legacy_data or (old is not None and hashlib.sha256(old).hexdigest() == LEGACY_INIT_HASH):
+            if old == legacy_data or (old is not None and hashlib.sha256(old).hexdigest() in {LEGACY_INIT_HASH, PRIOR_LEGACY_INIT_HASH}):
                 data = legacy_data
                 print("Основа: релиз v0.20.2; миграция отопления сохранена")
         if old == data:
@@ -64,9 +66,9 @@ def main():
             continue
         digest = hashlib.sha256(old).hexdigest() if old is not None else None
         expected = BASE_HASHES.get(name)
-        accepted = {expected}
+        accepted = {expected, PRIOR_PATCH_HASHES.get(name)}
         if name == "__init__.py":
-            accepted.add(LEGACY_INIT_HASH)
+            accepted.update({LEGACY_INIT_HASH, PRIOR_LEGACY_INIT_HASH})
         if digest not in accepted:
             raise SystemExit(
                 f"ОСТАНОВКА: {name} отличается от проверенной основы.\n"

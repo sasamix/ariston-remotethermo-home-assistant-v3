@@ -61,6 +61,7 @@ node = next(n for n in ast.parse(source).body if isinstance(n, ast.ClassDef) and
 namespace = {
     "AristonSensor": BaseSensor, "RestoreEntity": Restore, "Store": Storage,
     "ENERGY_SOURCES": module.ENERGY_SOURCES, "EnergyCounter": EnergyCounter,
+    "DAILY_KEYS": module.DAILY_KEYS, "electricity_days": module.electricity_days,
     "calendar_total": calendar_total, "nonnegative": module.nonnegative,
     "DOMAIN": "ariston", "hashlib": hashlib, "partial": partial, "timedelta": timedelta,
     "dt_util": SimpleNamespace(parse_datetime=datetime.fromisoformat),
@@ -75,13 +76,13 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         Storage.persisted = None
         self.device = SimpleNamespace(r2_kwh_snapshot_date=date(2026, 2, 2), r2_kwh_data={
             "histogramData": [
-                dataset("CurrentYear", [10] + [0] * 11),
-                dataset("CurrentMonth", [2, 3]),
+                dataset("CurrentYear", [10] + [0] * 11, tab="ConsumedGas"),
+                dataset("CurrentMonth", [2, 3], tab="ConsumedGas"),
             ],
         })
 
     def sensor(self, value=None, unit="kWh"):
-        sensor = Sensor(SimpleNamespace(device=self.device), SimpleNamespace(key="Central heating electricity consumption"))
+        sensor = Sensor(SimpleNamespace(device=self.device), SimpleNamespace(key="Central heating gas consumption"))
         if value is not None:
             sensor.old_state = SimpleNamespace(state=str(value), attributes={
                 "unit_of_measurement": unit, "last_reset": "2026-02-02T03:00:00+00:00",

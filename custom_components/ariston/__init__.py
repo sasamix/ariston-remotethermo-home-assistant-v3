@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 
 from datetime import timedelta
 
@@ -506,14 +507,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     raise RuntimeError("R2 response has no data.asPhysicalUnit")
 
                 device.gas_physical_unit_data = physical
-                # Keep the explicit calendar kWh report too. API-v2's rolling
-                # arrays have no timestamps and cannot be used as counters.
+                # Keep calendar reports to verify and date the API-v2 arrays.
+                # Unverified rolling arrays must never be added to a counter.
                 snapshot_finished = dt_util.now()
                 kwh = result.get("data", {}).get("asKwh")
                 if (
                     isinstance(kwh, dict)
                     and snapshot_started.date() == snapshot_finished.date()
                 ):
+                    device.r2_kwh_raw = result.get("data", {}).get("asKwhRaw")
                     device.r2_kwh_data = kwh
                     device.r2_kwh_snapshot_date = snapshot_finished.date()
                 # A request crossing local midnight is not a dated snapshot.
@@ -522,7 +524,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
             async def async_update_energy_with_web_metering():
                 """Refresh normal API energy plus optional native R2 m³ data."""
+                api_started = dt_util.now()
                 result = await original_async_update_energy()
+                api_finished = dt_util.now()
+                if api_started.date() == api_finished.date():
+                    device.energy_sequences_snapshot = deepcopy(device.consumptions_sequences)
+                    device.energy_sequences_date = api_finished.date()
+
 
                 try:
                     await async_update_physical_gas()

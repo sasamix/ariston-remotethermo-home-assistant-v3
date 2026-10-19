@@ -35,7 +35,7 @@ from .const import (
 from .coordinator import DeviceDataUpdateCoordinator
 from .entity import AristonEntity
 from .heating_scenarios import HEATING_SCENARIO_MANAGERS
-from .energy_counter import ENERGY_SOURCES, EnergyCounter, calendar_total, nonnegative
+from .energy_counter import ENERGY_SOURCES, DAILY_KEYS, EnergyCounter, calendar_total, electricity_days, nonnegative
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -424,13 +424,22 @@ class AristonCalendarEnergySensor(AristonSensor, RestoreEntity):
         payload = getattr(self.device, "r2_kwh_data", None)
         snapshot_date = getattr(self.device, "r2_kwh_snapshot_date", None)
         series, tabs = ENERGY_SOURCES[self.entity_description.key]
-        source = calendar_total(payload, series, tabs, snapshot_date)
-        self._source_available = source is not None
-        if source is None:
-            return
-        previous = calendar_total(payload, series, tabs, snapshot_date, previous_year=True)
         before = self._counter.as_dict()
-        self._counter.update(source, snapshot_date.year, previous)
+        if self.entity_description.key in DAILY_KEYS:
+            api_date = getattr(self.device, "energy_sequences_date", None)
+            days = electricity_days(
+                getattr(self.device, "energy_sequences_snapshot", None),
+                getattr(self.device, "r2_kwh_raw", None),
+                api_date, self.entity_description.key,
+            ) if api_date == snapshot_date else None
+            self._source_available = bool(days) and self._counter.update_days(days)
+        else:
+            source = calendar_total(payload, series, tabs, snapshot_date)
+            self._source_available = source is not None
+            if source is None:
+                return
+            previous = calendar_total(payload, series, tabs, snapshot_date, previous_year=True)
+            self._counter.update(source, snapshot_date.year, previous)
         if self._counter.as_dict() != before and self._store is not None:
             self._store.async_delay_save(self._counter.as_dict, 1)
 
@@ -461,7 +470,13 @@ class AristonCalendarEnergySensor(AristonSensor, RestoreEntity):
     @property
     def extra_state_attributes(self):
         attrs = dict(super().extra_state_attributes or {})
-        attrs["energy_counter_source"] = "R2 asKwh calendar reports"
+        daily = self.entity_description.key in DAILY_KEYS
+        attrs["energy_counter_source"] = (
+            "API v2 completed days verified against R2" if daily
+            else "R2 asKwh calendar reports"
+        )
+        if daily and self._counter and self._counter.daily:
+            attrs["source_through_date"] = max(self._counter.daily)
         if self._counter:
             attrs["source_year"] = self._counter.year
             attrs["source_total_kwh"] = self._counter.source
