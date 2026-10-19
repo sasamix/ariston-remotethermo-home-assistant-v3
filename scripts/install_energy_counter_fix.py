@@ -77,7 +77,7 @@ def main():
             accepted.update({LEGACY_INIT_HASH, PRIOR_LEGACY_INIT_HASH})
         blob_sha1 = (
             hashlib.sha1(
-                b"blob " + str(len(old)).encode("ascii") + b"\\x00" + old
+                b"blob " + str(len(old)).encode("ascii") + b"\x00" + old
             ).hexdigest()
             if old is not None else None
         )
