@@ -13,7 +13,7 @@ September sums are 0 + 3.263 kWh; October sums are 13.396 + 1.393 kWh.
 Both exactly match the independent R2 boilerElectricity monthly totals.
 The parser verifies both totals, array lengths, and each gas day's values
 against R2's explicit calendar labels before assigning dates to electricity.
-Unsupported layouts or mismatched snapshots remain unavailable, not zero.
+Unsupported layouts or mismatched snapshots are never counted as zero. Before the first verified baseline the entity stays unavailable; afterwards the last confirmed kWh value and its source time remain visible until both sources agree again.
 
 ## Accounting
 
@@ -49,8 +49,11 @@ upward revisions similarly appear at receipt time. The HA local calendar must
 match the boiler reporting calendar.
 
 Electricity's `source_through_date` identifies the last date processed, including
-the partial current day. `source_interval_end` identifies the end of the latest
-completed two-hour block.
+the partial current day. `source_interval_end` identifies the end of the latest **verified** completed
+two-hour block. Together with `source_snapshot_date`, it is persisted alongside
+the counter: new R2 responses do not overwrite these attributes until a
+matching API-v2 report is validated. Verified values survive temporary source
+failures, two-hour boundaries and HA reloads.
 `source_total_kwh` for these daily counters is the accumulated increment since
 baseline, not an annual electricity total. `energy_counter_source` identifies
 `API v2 two-hour intervals verified against R2`.
@@ -64,7 +67,7 @@ modify the manifest, registry, configuration or existing stored counter data.
 
 Run `python -m unittest discover -s tests -v`. Tests include the supplied API
 arrays and independent R2 calendar values, duplicate polls, restart, corrections,
-month/year transitions, gaps, mismatch rejection and actual sensor lifecycle
+month/year transitions, gaps, mismatch rejection/retention, persistence of verified source time and actual sensor lifecycle
 with HA doubles. Installation was checked against both previous patched bases.
 Live-device validation is still required after restarting HA Core. Verify the
 existing electricity entities become available and source_through_date is the
