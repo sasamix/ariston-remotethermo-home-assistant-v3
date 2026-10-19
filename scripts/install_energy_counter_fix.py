@@ -1,13 +1,21 @@
 """Install only the energy-counter fix, preserving local changes and IDs."""
 
 import argparse
+from contextlib import redirect_stdout, redirect_stderr
 from datetime import datetime
 import hashlib
 from pathlib import Path
 import re
 import shutil
+import sys
 import tempfile
+import traceback
 from urllib.request import urlopen
+
+# Verified GALEVO polling + persistent gas-counter update (immutable commit).
+# This script can be run without flags: python3 /tmp/install_energy_counter_fix.py
+PINNED_REF = "b2537d478ca4794cdb29197111c5ade4c3d4f986"
+
 
 BASE_HASHES = {
     "__init__.py": "1295e3d1750651d5f942924a42de9237ea589b48d1e125496da1fc9d2d0f34da",
@@ -40,11 +48,13 @@ SETUP_MARKER = b'        await hass.config_entries.async_forward_entry_setups(en
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--ref", help="Full immutable GitHub commit SHA")
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--ref", default=PINNED_REF,
+                        help="Full immutable GitHub commit SHA (default: tested update)")
     source.add_argument("--source-dir", type=Path, help="Local checkout (for testing)")
     parser.add_argument("--config", type=Path, default=Path("/config"))
     parser.add_argument("--check", action="store_true", help="Validate without writing")
+    parser.add_argument("--no-pause", action="store_true", help="Do not wait for Enter")
     args = parser.parse_args()
     if args.ref and not re.fullmatch(r"[0-9a-f]{40}", args.ref):
         raise SystemExit("Нужен полный SHA коммита из 40 символов.")
@@ -70,14 +80,24 @@ def main():
         old = path.read_bytes() if path.exists() else None
         originals[name] = old
         if name == "__init__.py":
-            # v0.20.2 differs only by this verified number-entity migration.
-            # Preserve it: an energy-only install must not change controls.
+            # Preserve the existing 0.20.2 heating-number migration (if any).
+            # Never enable/disable user's number/select entities from here.
             if data.count(SETUP_MARKER) != 1:
                 raise SystemExit("Неожиданная структура __init__.py; ничего не изменено")
             legacy_data = data.replace(SETUP_MARKER, LEGACY_INIT_BLOCK + SETUP_MARKER, 1)
             if old == legacy_data or (old is not None and hashlib.sha256(old).hexdigest() in {LEGACY_INIT_HASH, PRIOR_LEGACY_INIT_HASH}):
                 data = legacy_data
                 print("Основа: релиз v0.20.2; миграция отопления сохранена")
+            elif old is not None and old.count(LEGACY_INIT_BLOCK) == 1:
+                # Prior energy patch may already include the exact migration.
+                # Preserve it only if the underlying original is recognized.
+                plain = old.replace(LEGACY_INIT_BLOCK, b"", 1)
+                plain_blob = hashlib.sha1(
+                    b"blob " + str(len(plain)).encode("ascii") + b"\x00" + plain
+                ).hexdigest()
+                if plain_blob in PRIOR_LIVE_BLOB_SHA1["__init__.py"]:
+                    data = legacy_data
+                    print("Существующая миграция System heating flow сохранена")
         if old == data:
             print(f"Уже установлен: {name}")
             continue
@@ -92,7 +112,17 @@ def main():
             ).hexdigest()
             if old is not None else None
         )
-        if digest not in accepted and blob_sha1 not in PRIOR_LIVE_BLOB_SHA1.get(name, set()):
+        if (digest not in accepted
+                and blob_sha1 not in PRIOR_LIVE_BLOB_SHA1.get(name, set())
+                and not (name == "__init__.py"
+                         and old is not None
+                         and old.count(LEGACY_INIT_BLOCK) == 1
+                         and hashlib.sha1(
+                             b"blob " +
+                             str(len(old.replace(LEGACY_INIT_BLOCK, b"", 1))).encode("ascii") +
+                             b"\x00" + old.replace(LEGACY_INIT_BLOCK, b"", 1)
+                         ).hexdigest() in PRIOR_LIVE_BLOB_SHA1["__init__.py"])):
+
             raise SystemExit(
                 f"ОСТАНОВКА: {name} отличается от проверенной основы.\n"
                 f"SHA256: {digest}\nНичего не изменено. Пришлите этот вывод."
@@ -132,5 +162,55 @@ def main():
     print("Версия и ID сохранены. Теперь перезапустите Home Assistant Core.")
 
 
+class _Tee:
+    """Write every message both to the terminal and a durable log file."""
+
+    def __init__(self, stream, file):
+        self.stream = stream
+        self.file = file
+
+    def write(self, value):
+        self.stream.write(value)
+        self.file.write(value)
+        self.file.flush()
+
+    def flush(self):
+        self.stream.flush()
+        self.file.flush()
+
+
+def run():
+    log_path = Path("/config/ariston_update.log")
+    if not log_path.parent.is_dir():
+        log_path = Path("/tmp/ariston_update.log")
+
+    with log_path.open("a", encoding="utf-8") as log:
+        tee_out = _Tee(sys.stdout, log)
+        tee_err = _Tee(sys.stderr, log)
+        with redirect_stdout(tee_out), redirect_stderr(tee_err):
+            print("\\n=== Ariston Energy update:", datetime.now().isoformat(), "===")
+            print("Pinned source:", PINNED_REF)
+            print("Journal:", log_path)
+            code = 0
+            try:
+                main()
+            except SystemExit as err:
+                code = err.code if isinstance(err.code, int) else 1
+                if code:
+                    print("Установка не выполнена: проверка отклонила файлы.")
+            except Exception:
+                code = 1
+                print("ОШИБКА: установка завершилась неуспешно.")
+                traceback.print_exc()
+            print("=== Код завершения:", code, "===")
+            print("Журнал:", log_path)
+            if sys.stdin.isatty() and "--no-pause" not in sys.argv:
+                try:
+                    input("Нажмите Enter для выхода из установщика...")
+                except (EOFError, KeyboardInterrupt):
+                    pass
+            return code
+
+
 if __name__ == "__main__":
-    main()
+    sys.exit(run())
