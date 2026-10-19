@@ -234,8 +234,8 @@ class AristonHeatingZoneSensor(AristonEntity, SensorEntity):
         return None
 
 
-class AristonGasEnergySensor(CoordinatorEntity, SensorEntity):
-    """Native R2 cumulative gas counter for Home Assistant Energy."""
+class AristonGasEnergySensor(CoordinatorEntity, SensorEntity, RestoreEntity):
+    """R2 gas m³ accumulator that survives refreshes and HA restarts."""
 
     _attr_device_class = SensorDeviceClass.GAS
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
@@ -261,43 +261,94 @@ class AristonGasEnergySensor(CoordinatorEntity, SensorEntity):
         self._series = series
         self._last_valid_value: float | None = None
         self._last_valid_year: int | None = None
+        self._last_accepted_at: str | None = None
+        self._store = None
         base_id = entry.unique_id or getattr(coordinator.device, "gw", "ariston")
         self._config_entry_unique_id = entry.unique_id
-        # Keep the existing unique_id so HA preserves the same entity/history.
+        # The existing unique ID, entity ID, and Recorder history MUST stay.
         self._attr_unique_id = f"{base_id}_r2_gas_energy_live_v3_{suffix}"
+
+    async def async_added_to_hass(self):
+        """Restore the last safe gas reading BEFORE publishing fresh R2 data."""
+        key = hashlib.sha256(self.unique_id.encode()).hexdigest()
+        self._store = Store(self.hass, 1, f"{DOMAIN}.gas_energy_live.{key}")
+        saved = await self._store.async_load()
+        now_year = dt_util.now().year
+        saved_year = saved.get("year") if isinstance(saved, dict) else None
+        saved_value = (
+            nonnegative(saved.get("value")) if isinstance(saved, dict) else None
+        )
+
+        # First upgrade: migrate the last HA state from RestoreEntity.
+        # Later reloads use the dedicated persistent high-water mark as well.
+        old_state = await self.async_get_last_state()
+        old_value = nonnegative(old_state.state) if old_state else None
+        old_year = None
+        if old_state is not None:
+            old_updated = getattr(old_state, "last_updated", None)
+            if old_updated is not None:
+                old_year = dt_util.as_local(old_updated).year
+            else:
+                old_year = now_year
+
+        candidates = []
+        if saved_year == now_year and saved_value is not None:
+            candidates.append(saved_value)
+        if old_year == now_year and old_value is not None:
+            candidates.append(old_value)
+        if candidates:
+            self._last_valid_value = max(candidates)
+            self._last_valid_year = now_year
+        if (isinstance(saved, dict) and saved_year == now_year
+                and saved_value == self._last_valid_value):
+            self._last_accepted_at = saved.get("accepted_at")
+
+        # Preserve the restored baseline in Store even if the next R2 poll
+        # returns an older/revised cloud snapshot.
+        if self._last_valid_value is not None:
+            await self._store.async_save(self._stored_state())
+        await super().async_added_to_hass()
+
+    def _stored_state(self):
+        return {
+            "year": self._last_valid_year,
+            "value": self._last_valid_value,
+            "accepted_at": self._last_accepted_at,
+        }
 
     @property
     def native_value(self):
         value = get_native_gas_energy_live_total(
             self.coordinator.device, self._series
         )
-        current_year = datetime.now().year
+        current_year = dt_util.now().year
 
-        # No usable R2 snapshot: hold the previous valid counter value.
+        # Missing/invalid/temporary lower R2 totals are NOT meter resets.
+        value = nonnegative(value)
         if value is None:
             return self._last_valid_value
-
-        try:
-            value = float(value)
-        except (TypeError, ValueError):
+        if (self._last_valid_year == current_year
+                and self._last_valid_value is not None
+                and value < self._last_valid_value):
+            _LOGGER.debug(
+                "Ariston R2 gas %s holding verified %.3f over %.3f m3",
+                self._series, self._last_valid_value, value,
+            )
             return self._last_valid_value
 
-        # A fresh entity may legitimately start at zero, but once a positive
-        # yearly total has been seen, a transient zero/decrease is not published.
-        if self._last_valid_year == current_year and self._last_valid_value is not None:
-            if value < self._last_valid_value:
-                _LOGGER.warning(
-                    "Ariston R2 gas Energy ignored decreasing value for %s: %.3f -> %.3f m3",
-                    self._series,
-                    self._last_valid_value,
-                    value,
-                )
-                return self._last_valid_value
-
-        # On a real calendar-year change a reset is allowed.
-        self._last_valid_year = current_year
-        self._last_valid_value = value
+        if self._last_valid_year != current_year or value != self._last_valid_value:
+            # Calendar-year rollover is allowed; within a year never publish
+            # a lower value that HA would interpret as a meter reset.
+            self._last_valid_year = current_year
+            self._last_valid_value = value
+            self._last_accepted_at = dt_util.now().isoformat()
+            if self._store is not None:
+                self._store.async_delay_save(self._stored_state, 1)
         return value
+
+    @property
+    def extra_state_attributes(self):
+        return {"last_r2_accepted_at": self._last_accepted_at}
 
 
 
