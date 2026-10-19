@@ -40,8 +40,13 @@ unchanged. Storage and Recorder statistics are not deleted or rewritten.
 
 ## Limits
 
-The shortest verified source period is two hours. Counters advance when API-v2
-returns a new completed interval, using the configured energy poll cadence.
+The shortest verified source period is two hours. The GALEVO energy
+coordinator now polls API v2 every at most 10 minutes (even if an older
+energy configuration says 60); R2 still polls every 2 minutes independently.
+This reduces how late a new finished two-hour interval can be detected; it
+does **not** create sub-two-hour electricity source readings. Polling may
+take longer when the Ariston cloud is slow, unavailable or returning errors.
+Counters advance only when API-v2 returns a new completed interval.
 HA records the increment at receipt time, not retroactively in the original
 interval's hourly statistics. This patch does not repair historical Energy
 statistics or provide an instantaneous electricity meter. Cloud catch-up and
@@ -52,7 +57,9 @@ Electricity's `source_through_date` identifies the last date processed, includin
 the partial current day. `source_interval_end` identifies the end of the latest **verified** completed
 two-hour block. Together with `source_snapshot_date`, it is persisted alongside
 the counter: new R2 responses do not overwrite these attributes until a
-matching API-v2 report is validated. Verified values survive temporary source
+matching API-v2 report is validated. The diagnostic attributes
+`api_v2_snapshot_time`, `r2_snapshot_time` and `source_sync_status`
+show the independently fetched cloud data and any temporary mismatch. Verified values survive temporary source
 failures, two-hour boundaries and HA reloads.
 `source_total_kwh` for these daily counters is the accumulated increment since
 baseline, not an annual electricity total. `energy_counter_source` identifies
