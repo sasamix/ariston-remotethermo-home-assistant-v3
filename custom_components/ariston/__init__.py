@@ -608,6 +608,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+        # Remove ONLY our obsolete custom JSON-export button. Home Assistant's
+        # built-in /diagnostics API now provides a real browser download.
+        # Never delete devices, other buttons, user-disabled entities, or IDs
+        # used by Energy / automation.
+        registry = er.async_get(hass)
+        export_uid = f"{device.gateway}-Ariston export R2 diagnostics"
+        export_entity_id = registry.async_get_entity_id("button", DOMAIN, export_uid)
+        if export_entity_id:
+            old_button = registry.async_get(export_entity_id)
+            if old_button is not None and old_button.config_entry_id == entry.entry_id:
+                registry.async_remove(export_entity_id)
+                _LOGGER.info("Ariston obsolete R2 JSON button removed from registry")
+
         entry.async_on_unload(entry.add_update_listener(update_listener))
 
         if device.system_type == SystemType.GALEVO:
