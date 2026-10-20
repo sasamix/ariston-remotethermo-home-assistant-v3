@@ -109,8 +109,10 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.device.r2_kwh_data = None
         sensor = self.sensor(0.077)
         await sensor.async_added_to_hass()
-        self.assertFalse(sensor.available)
-        self.assertIsNone(sensor.native_value)
+        # A previously verified HA baseline remains visible when R2 is down.
+        # This is the requested protection against unavailable Energy meters.
+        self.assertTrue(sensor.available)
+        self.assertEqual(sensor.native_value, 0.077)
         self.device.r2_kwh_data = report
         sensor._handle_coordinator_update()
         self.assertTrue(sensor.available)
