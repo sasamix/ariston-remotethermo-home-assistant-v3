@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from functools import partial
 import hashlib
@@ -40,6 +40,31 @@ from .energy_counter import ENERGY_SOURCES, DAILY_KEYS, EnergyCounter, calendar_
 _LOGGER = logging.getLogger(__name__)
 
 
+def _metering_device_info(parent):
+    """Group Ariston GALEVO energy entities into one linked virtual device.
+
+    The existing entity unique_id and entity_id are intentionally untouched:
+    only the device registry association changes. Never modify parent in-place.
+    """
+    identifiers = parent.get("identifiers", set())
+    primary = next(
+        (identifier for identifier in identifiers
+         if isinstance(identifier, tuple) and len(identifier) == 2
+         and identifier[0] == DOMAIN and identifier[1]),
+        None,
+    )
+    if primary is None:
+        return parent
+    return {
+        "identifiers": {(DOMAIN, f"{primary[1]}:energy-metering")},
+        "via_device": primary,
+        "manufacturer": parent.get("manufacturer", "Ariston"),
+        "model": "GALEVO · учёт энергии",
+        "name": f"{parent.get('name') or 'Ariston'} — Энергопотребление",
+        "sw_version": parent.get("sw_version"),
+    }
+
+
 @dataclass(kw_only=True, frozen=True)
 class AristonHeatingSensorEntityDescription(SensorEntityDescription):
     """Sensor description compatible with AristonEntity."""
@@ -72,10 +97,17 @@ async def async_setup_entry(
                 and description.key in ENERGY_SOURCES
                 else AristonSensor
             )
+            # Main Energy counters are readings, not diagnostics. Keep all
+            # description keys, unique IDs, units and state classes unchanged.
+            shown_description = (
+                replace(description, entity_category=None)
+                if sensor_type is AristonCalendarEnergySensor
+                else description
+            )
             ariston_sensors.append(
                 sensor_type(
                     coordinator,
-                    description,
+                    shown_description,
                 )
             )
 
@@ -139,6 +171,11 @@ async def async_setup_entry(
         # by this platform. That is the exact HA device currently named "Печка".
         real_device_info = None
         for _normal_sensor in ariston_sensors:
+            # Do not derive the parent from a metering entity: its device_info
+            # now points to the linked meter, not to the real GALEVO device.
+            if (getattr(_normal_sensor.entity_description, "coordinator", None)
+                    == ENERGY_COORDINATOR):
+                continue
             _info = getattr(_normal_sensor, "device_info", None)
             if _info:
                 real_device_info = _info
@@ -153,7 +190,7 @@ async def async_setup_entry(
                     "heating",
                     "Газ отопление — Energy Live",
                     "Heating",
-                    real_device_info,
+                    _metering_device_info(real_device_info),
                 ),
                 AristonGasEnergySensor(
                     energy_coordinator,
@@ -161,7 +198,7 @@ async def async_setup_entry(
                     "dhw",
                     "Газ ГВС — Energy Live",
                     "Dhw",
-                    real_device_info,
+                    _metering_device_info(real_device_info),
                 ),
             ]
         )
@@ -359,12 +396,40 @@ class AristonGasEnergySensor(CoordinatorEntity, SensorEntity, RestoreEntity):
 
     @property
     def extra_state_attributes(self):
-        return {"last_r2_accepted_at": self._last_accepted_at}
+        """Expose source/accepted discrepancy without changing the counter."""
+        source = nonnegative(get_native_gas_energy_live_total(
+            self.coordinator.device, self._series
+        ))
+        snapshot_time = getattr(self.coordinator.device, "r2_gas_snapshot_time", None)
+        return {
+            "last_r2_accepted_at": self._last_accepted_at,
+            "r2_snapshot_time": (
+                snapshot_time.isoformat() if snapshot_time is not None else None
+            ),
+            "r2_source_total_m3": source,
+            "r2_source_gap_m3": (
+                round(self._last_valid_value - source, 3)
+                if source is not None and self._last_valid_value is not None
+                else None
+            ),
+        }
 
 
 
 class AristonSensor(AristonEntity, SensorEntity):
     """Base class for specific ariston sensors."""
+
+    @property
+    def device_info(self):
+        """Place only GALEVO energy readings under the linked meter device."""
+        parent = super().device_info
+        if (
+            self.device.system_type == SystemType.GALEVO
+            and getattr(self.entity_description, "coordinator", None)
+            == ENERGY_COORDINATOR
+        ):
+            return _metering_device_info(parent)
+        return parent
 
     def __init__(
         self,
