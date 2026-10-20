@@ -42,7 +42,7 @@ class InstallerRegressionTests(unittest.TestCase):
     def test_default_update_ref_is_pinned_to_a_commit(self):
         self.assertEqual(
             installer.PINNED_REF,
-            "d36c2db0c91dec9e64f3c7c80e1f6255db241a4b",
+            "886526beac7b08ed431a586649799387f83065cf",
         )
 
     def test_repeated_installation_is_idempotent(self):
