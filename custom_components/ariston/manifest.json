@@ -1,12 +1,12 @@
 {
   "domain": "ariston",
   "name": "Ariston",
+  "after_dependencies": ["recorder"],
   "codeowners": [
     "@sasamix"
   ],
   "config_flow": true,
   "dependencies": [],
-  "after_dependencies": ["recorder"],
   "documentation": "https://github.com/sasamix/ariston-remotethermo-home-assistant-v3",
   "homekit": {},
   "iot_class": "cloud_polling",
