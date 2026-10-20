@@ -530,6 +530,9 @@ class AristonCalendarEnergySensor(AristonSensor, RestoreEntity):
         self._store = None
         self._source_available = False
         self._restored_floor = 0.0
+        # A Recorder/Store baseline is already a confirmed reading.
+        # Do not hide it while API v2 and R2 reports are desynchronized.
+        self._has_restored_baseline = False
 
     async def async_added_to_hass(self):
         key = hashlib.sha256(self.unique_id.encode()).hexdigest()
@@ -546,6 +549,10 @@ class AristonCalendarEnergySensor(AristonSensor, RestoreEntity):
                 initial, old_state.attributes.get("unit_of_measurement", "kWh"), "kWh"
             )
         self._restored_floor = initial or 0.0
+        self._has_restored_baseline = bool(
+            initial is not None
+            or (isinstance(saved, dict) and nonnegative(saved.get("value")) is not None)
+        )
         self._counter = EnergyCounter(saved, initial or 0.0)
         if saved is None and old_state:
             # Keep the old reset marker constant through migration. Changing
@@ -648,11 +655,13 @@ class AristonCalendarEnergySensor(AristonSensor, RestoreEntity):
         # A transient coordinator failure or an R2/API-v2 polling mismatch
         # must not turn an already verified, persisted energy value unavailable.
         # An unverified first reading stays unavailable until validated.
-        return self._source_available
+        return self._source_available or self._has_restored_baseline
 
     @property
     def native_value(self):
-        if self._counter is None or self._counter.source is None:
+        if self._counter is None:
+            return None
+        if self._counter.source is None and not self._has_restored_baseline:
             return None
         # Store and Recorder flush independently. After an abrupt shutdown,
         # never publish less than the last visible value while the persisted
