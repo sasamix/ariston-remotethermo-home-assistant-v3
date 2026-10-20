@@ -115,7 +115,7 @@ class MeteringDeviceTests(unittest.TestCase):
         self.assertEqual(child["identifiers"],
                          {("ariston", "SERIAL:energy-metering")})
         self.assertEqual(child["via_device"], ("ariston", "SERIAL"))
-        self.assertEqual(child["name"], "Печка — Энергопотребление")
+        self.assertEqual(child["name"], "Энергопотребление")
         self.assertEqual(parent["identifiers"], {("ariston", "SERIAL")})
 
     def test_missing_serial_leaves_parent_unchanged(self):
