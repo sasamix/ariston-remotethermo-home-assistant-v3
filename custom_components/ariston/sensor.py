@@ -175,8 +175,6 @@ async def async_setup_entry(
             ]
         )
 
-    async_add_entities(ariston_sensors)
-
     # Independent R2 gas counters for Home Assistant Energy Dashboard.
     # They intentionally do not use AristonSensorEntityDescription/AristonEntity.
     energy_coordinator: DeviceDataUpdateCoordinator = hass.data[DOMAIN][entry.unique_id][
@@ -199,26 +197,30 @@ async def async_setup_entry(
                 break
 
         if real_device_info is not None:
-            async_add_entities(
-                [
+            # Add both R2 counters to the *same* HA platform batch. Previously
+            # they were scheduled as a second background add task, which could
+            # race the normal sensor registry setup on a slow Recorder restore.
+            meter_device = _metering_device_info(real_device_info)
+            ariston_sensors.extend([
                 AristonGasEnergySensor(
-                    energy_coordinator,
-                    entry,
-                    "heating",
-                    "Газ отопление — Energy Live",
-                    "Heating",
-                    _metering_device_info(real_device_info),
+                    energy_coordinator, entry, "heating",
+                    "Газ отопление — Energy Live", "Heating", meter_device,
                 ),
                 AristonGasEnergySensor(
-                    energy_coordinator,
-                    entry,
-                    "dhw",
-                    "Газ ГВС — Energy Live",
-                    "Dhw",
-                    _metering_device_info(real_device_info),
+                    energy_coordinator, entry, "dhw",
+                    "Газ ГВС — Energy Live", "Dhw", meter_device,
                 ),
-            ]
-        )
+            ])
+
+    # One registration batch for all Ariston entities. No new IDs.
+    _LOGGER.info(
+        "Ariston sensors prepared: %d total, %d GALEVO energy meters",
+        len(ariston_sensors),
+        sum(isinstance(entity, AristonCalendarEnergySensor)
+            or isinstance(entity, AristonGasEnergySensor)
+            for entity in ariston_sensors),
+    )
+    async_add_entities(ariston_sensors)
 
 
 
