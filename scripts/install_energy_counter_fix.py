@@ -12,9 +12,9 @@ import tempfile
 import traceback
 from urllib.request import urlopen
 
-# Verified GALEVO gas R2 midnight guard, metering grouping and polling (immutable commit).
+# Pinned GALEVO meter sensor recovery, device naming and private R2 export (immutable commit).
 # This script can be run without flags: python3 /tmp/install_energy_counter_fix.py
-PINNED_REF = "310c3e54df3ed806e45d15a8220a7d90fe9ebdb8"
+PINNED_REF = "1d9119cfdd718649208c00801619f9c03c64650f"
 
 
 BASE_HASHES = {
@@ -29,21 +29,27 @@ PRIOR_LIVE_BLOB_SHA1 = {
     "__init__.py": {
         "dab2c882ac078fcd86555fd7a118074a1ee50629",
         "7f2f2d807def8aa745b6bd48e47f98d8983cdbfd",
+        "3ac623161a955484770285bb67d0254a780b53e7",
     },
     "sensor.py": {
         "6cacbb68550f7ed3302207e08cd93bcd4499e12d",
         "6bc21732ef07f67fedee75d90ad0673a9eaa9701",
         "79e7b294f5d3fed03f7b088c6a8f015e10d08755",
         "ef98bba3870c29cdc0ef7abce5df07377c20a4eb",
+        "57eade5053f7c814ea892058a8db05c4831e1e21",
     },
     "energy_counter.py": {
         "319bac6591bfb3ab743d1a3c1b39df9737ccc4b4",
         "0848e7ab1b6692868bc2b9f381b812de4cd58fa3",
     },
     # Old PR #5 metering parser before the R2 midnight consistency fix.
-    "const.py": {"52d8808135430d706cc6bea3c2ecc9dbaaf7e8c4"},
+    "const.py": {
+        "52d8808135430d706cc6bea3c2ecc9dbaaf7e8c4",
+        "6e6dbb3676b86b0948890346f34f5c445d329acd",
+    },
+    "button.py": {"06086410c4ddeeb9ed42a69009b7ee51f4a74d59"},
 }
-FILES = (*BASE_HASHES, "energy_counter.py", "const.py")
+FILES = (*BASE_HASHES, "energy_counter.py", "const.py", "button.py")
 LEGACY_INIT_HASH = "29d8217fa113a3b2eb4db3b7d85eaaa8526baed67c8aa034d0d94f89fa978dfe"
 LEGACY_INIT_BLOCK = b'        # 0.20.1 incorrectly disabled the two existing System heating-flow\n        # numbers. Undo that migration before their platform is set up, while\n        # respecting any entries the user explicitly disabled.\n        registry = er.async_get(hass)\n        for zone in device.zone_numbers:\n            for label in ("temperature", "offset"):\n                unique_id = (\n                    f"{device.gateway}-Ariston System heating flow "\n                    f"{label} {zone}-{zone}"\n                )\n                entity_id = registry.async_get_entity_id("number", DOMAIN, unique_id)\n                registered = registry.async_get(entity_id) if entity_id else None\n                if (\n                    registered\n                    and registered.config_entry_id == entry.entry_id\n                    and registered.disabled_by == er.RegistryEntryDisabler.INTEGRATION\n                ):\n                    registry.async_update_entity(entity_id, disabled_by=None)\n\n'
 SETUP_MARKER = b'        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)'
