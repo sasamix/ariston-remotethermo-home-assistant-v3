@@ -39,6 +39,19 @@ from .energy_counter import ENERGY_SOURCES, DAILY_KEYS, EnergyCounter, calendar_
 
 _LOGGER = logging.getLogger(__name__)
 
+# Ordinary readings shown in the meter device's Sensors section, not Diagnostics.
+# These identities are untouched; only their entity_category changes.
+METERING_READING_KEYS = frozenset({
+    "Central heating gas current 2h volume",
+    "Domestic hot water gas current 2h volume",
+    "Central heating gas current month native",
+    "Domestic hot water gas current month native",
+    "Central heating gas current 2h average flow",
+    "Domestic hot water gas current 2h average flow",
+    "Electricity consumption for heating last month",
+    "Electricity consumption for water last month",
+})
+
 
 def _metering_device_info(parent):
     """Group Ariston GALEVO energy entities into one linked virtual device.
@@ -60,7 +73,7 @@ def _metering_device_info(parent):
         "via_device": primary,
         "manufacturer": parent.get("manufacturer", "Ariston"),
         "model": "GALEVO · учёт энергии",
-        "name": f"{parent.get('name') or 'Ariston'} — Энергопотребление",
+        "name": "Энергопотребление",
         "sw_version": parent.get("sw_version"),
     }
 
@@ -82,34 +95,38 @@ async def async_setup_entry(
         coordinator: DeviceDataUpdateCoordinator = hass.data[DOMAIN][entry.unique_id][
             description.coordinator
         ]
-        if (
-            coordinator
-            and coordinator.device
-            and coordinator.device.are_device_features_available(
-                description.device_features,
-                description.system_types,
-                description.whe_types,
-            )
+        if not coordinator or not coordinator.device:
+            continue
+
+        # GALEVO exposes its split metering reports separately from the
+        # older SDK capability list. Do not drop an existing Energy entity
+        # merely because the SDK flags for that specific consumption channel
+        # were not advertised. The entity itself waits for verified source data.
+        is_galevo_energy = (
+            coordinator.device.system_type == SystemType.GALEVO
+            and description.key in ENERGY_SOURCES
+        )
+        if not is_galevo_energy and not coordinator.device.are_device_features_available(
+            description.device_features,
+            description.system_types,
+            description.whe_types,
         ):
-            sensor_type = (
-                AristonCalendarEnergySensor
-                if coordinator.device.system_type == SystemType.GALEVO
-                and description.key in ENERGY_SOURCES
-                else AristonSensor
+            continue
+
+        sensor_type = (
+            AristonCalendarEnergySensor if is_galevo_energy else AristonSensor
+        )
+        # Put user-facing consumption in Sensors. Keep only technical
+        # diagnostics in Diagnostics. Never change the stable unique_id.
+        shown_description = (
+            replace(description, entity_category=None)
+            if is_galevo_energy or (
+                coordinator.device.system_type == SystemType.GALEVO
+                and description.key in METERING_READING_KEYS
             )
-            # Main Energy counters are readings, not diagnostics. Keep all
-            # description keys, unique IDs, units and state classes unchanged.
-            shown_description = (
-                replace(description, entity_category=None)
-                if sensor_type is AristonCalendarEnergySensor
-                else description
-            )
-            ariston_sensors.append(
-                sensor_type(
-                    coordinator,
-                    shown_description,
-                )
-            )
+            else description
+        )
+        ariston_sensors.append(sensor_type(coordinator, shown_description))
 
     heating_managers = hass.data[DOMAIN][entry.unique_id].get(
         HEATING_SCENARIO_MANAGERS, {}
