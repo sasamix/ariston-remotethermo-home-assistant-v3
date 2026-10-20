@@ -118,6 +118,20 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(sensor.available)
         self.assertEqual(sensor.native_value, 0.077)
 
+    async def test_zero_is_a_valid_restored_electricity_baseline(self):
+        self.device.r2_kwh_data = None
+        sensor = self.sensor(0.0)
+        await sensor.async_added_to_hass()
+        self.assertTrue(sensor.available)
+        self.assertEqual(sensor.native_value, 0.0)
+
+    async def test_never_seen_meter_does_not_fake_zero(self):
+        self.device.r2_kwh_data = None
+        sensor = self.sensor()
+        await sensor.async_added_to_hass()
+        self.assertFalse(sensor.available)
+        self.assertIsNone(sensor.native_value)
+
     async def test_display_wh_restores_native_kwh(self):
         sensor = self.sensor(77, "Wh")
         await sensor.async_added_to_hass()
