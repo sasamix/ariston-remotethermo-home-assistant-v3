@@ -46,9 +46,12 @@ class MidnightGasTests(unittest.TestCase):
 
     @staticmethod
     def buckets(first=0.0, future=False):
-        return [{"x": f"{i * 2:02d}-{(i * 2 + 2) % 24:02d}",
+        labels = ("12-02 AM", "02-04 AM", "04-06 AM", "06-08 AM",
+                  "08-10 AM", "10-12 PM", "12-02 PM", "02-04 PM",
+                  "04-06 PM", "06-08 PM", "08-10 PM", "10-12 AM")
+        return [{"x": label,
                  "y": first if i == 0 else 0.5 if future and i == 11 else 0.0}
-                for i in range(12)]
+                for i, label in enumerate(labels)]
 
     def device(self, first=0.0, future=False, previous=None,
                snapshot_date=None, missing_last_day=False):
@@ -95,6 +98,26 @@ class MidnightGasTests(unittest.TestCase):
     def test_missing_month_day_holds_counter(self):
         self.assertIsNone(self.calculate(
             self.device(missing_last_day=True), "Dhw"))
+
+    def test_real_r2_rounded_day_20_10_32_vs_10_00(self):
+        """Reproduce physical unit data from GALEVO's 21 October snapshot."""
+        Clock.current = datetime(2026, 10, 21, 0, 8, tzinfo=Clock.TZ)
+        actual_hourly = [1.3, 0.9, 1.42, 0.9, 0.8, 0.5,
+                         0.9, 0.7, 0.5, 1.0, 0.5, 0.9]
+        self.assertAlmostEqual(sum(actual_hourly), 10.32)
+        month = [{"x": str(i), "y": 10.0 if i == 20 else 0.0}
+                 for i in range(1, 32)]
+        prev = [{"x": b["x"], "y": v} for b, v in
+                zip(self.buckets(), actual_hourly)]
+        device = self.device()
+        device.r2_gas_snapshot_date = Clock.current.date()
+        dataset = device.gas_physical_unit_data["histogramData"]
+        dataset[1]["items"] = month
+        dataset[2]["items"] = prev
+        device.gas_physical_unit_data["isRounded"] = True
+        self.assertEqual(self.calculate(device, "Dhw"), 953.0 + 10.0)
+        device.gas_physical_unit_data["isRounded"] = False
+        self.assertIsNone(self.calculate(device, "Dhw"))
 
     def test_yesterday_snapshot_cannot_be_relabelled(self):
         self.assertIsNone(self.calculate(
