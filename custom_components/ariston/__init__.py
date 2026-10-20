@@ -659,26 +659,3 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     return unload_ok
 
-
-async def async_remove_config_entry_device(
-    hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    device_entry: dr.DeviceEntry,
-) -> bool:
-    """Allow manual removal of stale empty Ariston devices."""
-    entity_registry = er.async_get(hass)
-
-    # Never allow deletion while any entity is still attached to this device.
-    if er.async_entries_for_device(
-        entity_registry,
-        device_entry.id,
-        include_disabled_entities=True,
-    ):
-        return False
-
-    # The current device registry is single-config-entry. Only handle devices
-    # actually owned by this Ariston config entry.
-    if device_entry.config_entry_id != config_entry.entry_id:
-        return False
-
-    return True
