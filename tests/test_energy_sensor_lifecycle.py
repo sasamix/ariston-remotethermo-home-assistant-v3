@@ -137,6 +137,16 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         await sensor.async_added_to_hass()
         self.assertEqual(sensor.native_value, 0.077)
 
+    async def test_unconfirmed_store_zero_remains_unavailable_on_restart(self):
+        self.device.r2_kwh_data = None
+        first = self.sensor()
+        await first.async_added_to_hass()
+        self.assertIsNone(first.native_value)
+        second = self.sensor()
+        await second.async_added_to_hass()
+        self.assertFalse(second.available)
+        self.assertIsNone(second.native_value)
+
     async def test_store_behind_restored_state_does_not_replay_delta(self):
         sensor = self.sensor(0)
         await sensor.async_added_to_hass()
