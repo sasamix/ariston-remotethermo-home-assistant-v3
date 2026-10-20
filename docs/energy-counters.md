@@ -80,3 +80,41 @@ Live-device validation is still required after restarting HA Core. Verify the
 existing electricity entities become available and source_through_date is the
 current date and source_interval_end matches the completed two-hour boundary.
 No new entity IDs should appear.
+
+## 20 October GALEVO R2 gas and entity layout
+
+R2 asPhysicalUnit CurrentDay values may still describe yesterday immediately
+after midnight. The gas m³ Energy Live functions now use only **completed**
+two-hour periods, reject nonzero future buckets, require PreviousDay totals
+to agree with the matching CurrentMonth daily cell (tolerance 0.12 m³ for
+rounded two-hour cells), and reject calendar-mismatched snapshots. New gas
+increases from dated R2 snapshots must appear in two distinct HTTP responses;
+repeated reads of the same snapshot do not count as confirmation. As before,
+a missing/lower sample does not reset a TOTAL_INCREASING sensor. The existing
+values are preserved, with source readings, source gap and pending candidate
+shown as diagnostic attributes. Intra-block gas consumption appears only
+once the current two-hour interval closes, rather than at an unsupported
+per-minute resolution.
+
+GALEVO's metering entities are grouped under the new linked **"<boiler>
+— Энергопотребление"** device. Main gas m³ and kWh counters are ordinary
+Sensors; auxiliary two-hour, per-month and last-month readings remain
+Diagnostics of that metering device. The original physical boiler device
+retains climate, schedules, water-heater and temperature controls, settings
+and diagnostics. No entity unique ID, entity ID, statistics ID, state class,
+tariff setting or user-enabled/disabled entity is renamed or deleted.
+Only the device association and presentational category change for metering
+entities, so automations that explicitly target the old physical *device*,
+rather than the entity ID, should be reviewed before installing.
+
+To deploy from the existing backup-first installer, update it to the PR's
+latest revision and run `--check` first. The pinned source commit includes
+four files: `__init__.py`, `sensor.py`, `energy_counter.py`, `const.py`.
+Unrecognized on-disk customizations cause an explicit stop, not an overwrite.
+A single Core restart after a confirmed install loads new Python modules.
+
+**Important:** The 20 October 00:00 historical +2.56 m³ DHW anomaly is
+not repaired by an integration upgrade. The previous high-water sensor value
+and MariaDB Recorder sum remain unchanged until a separate data repair
+has been previewed and verified against the real R2 daily history, including
+the additional older 0.54 m³ mismatch in the October HA panel.
