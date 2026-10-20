@@ -592,9 +592,22 @@ class AristonCalendarEnergySensor(AristonSensor, RestoreEntity):
                 initial, old_state.attributes.get("unit_of_measurement", "kWh"), "kWh"
             )
         self._restored_floor = initial or 0.0
-        self._has_restored_baseline = bool(
+        saved_meter_value = (
+            nonnegative(saved.get("value")) if isinstance(saved, dict) else None
+        )
+        # An unverified brand-new meter writes a placeholder zero to Store.
+        # That placeholder is NOT a confirmed baseline on the next reboot.
+        # Preserve a nonzero historical baseline or a value backed by a
+        # confirmed source; also trust explicit numeric Recorder state 0.0.
+        self._has_restored_baseline = (
             initial is not None
-            or (isinstance(saved, dict) and nonnegative(saved.get("value")) is not None)
+            or (
+                saved_meter_value is not None
+                and (
+                    saved_meter_value > 0
+                    or nonnegative(saved.get("source")) is not None
+                )
+            )
         )
         self._counter = EnergyCounter(saved, initial or 0.0)
         if saved is None and old_state:
