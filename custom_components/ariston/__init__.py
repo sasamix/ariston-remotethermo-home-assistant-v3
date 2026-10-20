@@ -506,10 +506,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 if not isinstance(physical, dict):
                     raise RuntimeError("R2 response has no data.asPhysicalUnit")
 
+                snapshot_finished = dt_util.now()
+                # Prevent a request that straddled a local calendar/two-hour
+                # boundary from publishing yesterday's report as today's gas.
+                # Keep the last confirmed meter state until a fresh R2 read.
+                if (
+                    snapshot_started.date() != snapshot_finished.date()
+                    or snapshot_started.hour // 2 != snapshot_finished.hour // 2
+                ):
+                    _LOGGER.debug(
+                        "Ariston R2 gas ignored cross-boundary snapshot: %s -> %s",
+                        snapshot_started.isoformat(),
+                        snapshot_finished.isoformat(),
+                    )
+                    return
+
                 device.gas_physical_unit_data = physical
+                device.r2_gas_snapshot_date = snapshot_finished.date()
+                device.r2_gas_snapshot_time = snapshot_finished
                 # Keep calendar reports to verify and date the API-v2 arrays.
                 # Unverified rolling arrays must never be added to a counter.
-                snapshot_finished = dt_util.now()
                 kwh = result.get("data", {}).get("asKwh")
                 if (
                     isinstance(kwh, dict)
