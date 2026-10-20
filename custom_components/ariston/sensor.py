@@ -299,6 +299,10 @@ class AristonGasEnergySensor(CoordinatorEntity, SensorEntity, RestoreEntity):
         self._last_valid_value: float | None = None
         self._last_valid_year: int | None = None
         self._last_accepted_at: str | None = None
+        # A new R2 increase must survive two distinct HTTP snapshots before
+        # entering HA's irreversible total_increasing/high-water history.
+        self._pending_source_value: float | None = None
+        self._pending_source_time = None
         self._store = None
         base_id = entry.unique_id or getattr(coordinator.device, "gw", "ariston")
         self._config_entry_unique_id = entry.unique_id
@@ -364,14 +368,34 @@ class AristonGasEnergySensor(CoordinatorEntity, SensorEntity, RestoreEntity):
         value = nonnegative(value)
         if value is None:
             return self._last_valid_value
-        if (self._last_valid_year == current_year
-                and self._last_valid_value is not None
-                and value < self._last_valid_value):
-            _LOGGER.debug(
-                "Ariston R2 gas %s holding verified %.3f over %.3f m3",
-                self._series, self._last_valid_value, value,
-            )
-            return self._last_valid_value
+        if self._last_valid_year == current_year and self._last_valid_value is not None:
+            if value <= self._last_valid_value:
+                # A cloud correction or unchanged reading invalidates any
+                # unconfirmed high-water candidate. Never publish a decrease.
+                self._pending_source_value = None
+                self._pending_source_time = None
+                if value < self._last_valid_value:
+                    _LOGGER.debug(
+                        "Ariston R2 gas %s holding verified %.3f over %.3f m3",
+                        self._series, self._last_valid_value, value,
+                    )
+                    return self._last_valid_value
+            else:
+                snapshot_time = getattr(
+                    self.coordinator.device, "r2_gas_snapshot_time", None
+                )
+                if snapshot_time is not None:
+                    if (
+                        self._pending_source_value != value
+                        or self._pending_source_time == snapshot_time
+                    ):
+                        # Calling native_value twice for one snapshot is not
+                        # two confirmations; wait for the next HTTP response.
+                        self._pending_source_value = value
+                        self._pending_source_time = snapshot_time
+                        return self._last_valid_value
+                    self._pending_source_value = None
+                    self._pending_source_time = None
 
         if self._last_valid_year != current_year or value != self._last_valid_value:
             # Calendar-year rollover is allowed; within a year never publish
@@ -407,6 +431,7 @@ class AristonGasEnergySensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                 snapshot_time.isoformat() if snapshot_time is not None else None
             ),
             "r2_source_total_m3": source,
+            "r2_pending_increase_m3": self._pending_source_value,
             "r2_source_gap_m3": (
                 round(self._last_valid_value - source, 3)
                 if source is not None and self._last_valid_value is not None
