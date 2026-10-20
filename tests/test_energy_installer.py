@@ -25,7 +25,7 @@ class InstallerRegressionTests(unittest.TestCase):
         self.cfg = Path(self.temporary.name)
         self.dst = self.cfg / "custom_components" / "ariston"
         self.dst.mkdir(parents=True)
-        for filename in ("__init__.py", "sensor.py", "energy_counter.py", "const.py", "button.py", "manifest.json"):
+        for filename in ("__init__.py", "sensor.py", "energy_counter.py", "const.py", "button.py", "manifest.json", "diagnostics.py"):
             shutil.copy2(ROOT / "custom_components" / "ariston" / filename,
                          self.dst / filename)
 
@@ -42,7 +42,7 @@ class InstallerRegressionTests(unittest.TestCase):
     def test_default_update_ref_is_pinned_to_a_commit(self):
         self.assertEqual(
             installer.PINNED_REF,
-            "1d9119cfdd718649208c00801619f9c03c64650f",
+            "d150cd0106ec6d987d3d372e19c9f17ad5a92c5b",
         )
 
     def test_repeated_installation_is_idempotent(self):
@@ -64,6 +64,15 @@ class InstallerRegressionTests(unittest.TestCase):
             self.launch()
         self.assertIn("отличается от проверенной основы", str(err.exception))
         self.assertEqual(path.read_bytes(), before)
+        self.assertFalse((self.cfg / "ariston_backups").exists())
+
+    def test_check_stages_new_native_diagnostics_without_writing(self):
+        # Diagnostics was not present in the previous installed version.
+        (self.dst / "diagnostics.py").unlink()
+        output = self.launch("--check")
+        self.assertIn("Проверка пройдена", output)
+        self.assertIn("diagnostics.py", output)
+        self.assertFalse((self.dst / "diagnostics.py").exists())
         self.assertFalse((self.cfg / "ariston_backups").exists())
 
     def test_keeps_existing_heating_number_migration(self):
