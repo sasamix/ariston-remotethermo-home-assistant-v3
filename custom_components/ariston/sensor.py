@@ -39,6 +39,38 @@ from .energy_counter import ENERGY_SOURCES, DAILY_KEYS, EnergyCounter, calendar_
 
 _LOGGER = logging.getLogger(__name__)
 
+
+async def _async_last_recorder_meter_state(hass, entity_id):
+    """Get an existing numeric Recorder state without creating a reset.
+
+    This recovery only runs if both Store and RestoreEntity have no usable
+    value. The latest 5-minute/hourly statistics are read-only and usually
+    available even when HA last_state is 'unavailable'. Do not fall back to
+    guessed zeros or alter the stored Recorder sum.
+    """
+    if "recorder" not in hass.config.components:
+        return None
+    from homeassistant.components.recorder import get_instance
+    from homeassistant.components.recorder.statistics import (
+        get_last_statistics, get_last_short_term_statistics,
+    )
+    recorder = get_instance(hass)
+    for getter in (get_last_short_term_statistics, get_last_statistics):
+        try:
+            report = await recorder.async_add_executor_job(
+                getter, hass, 1, entity_id, True, {"state"}
+            )
+            for row in report.get(entity_id, []):
+                value = nonnegative(row.get("state"))
+                if value is not None:
+                    return value
+        except Exception:
+            _LOGGER.exception(
+                "Ariston gas Recorder baseline read failed for %s", entity_id
+            )
+    return None
+
+
 # Ordinary readings shown in the meter device's Sensors section, not Diagnostics.
 # These identities are untouched; only their entity_category changes.
 METERING_READING_KEYS = frozenset({
@@ -349,6 +381,17 @@ class AristonGasEnergySensor(CoordinatorEntity, SensorEntity, RestoreEntity):
             if old_updated is not None:
                 old_year = dt_util.as_local(old_updated).year
             else:
+                old_year = now_year
+
+        # A missing Store or an unavailable last HA state is not proof that
+        # a previously valid gas meter had no baseline. Recover its most
+        # recent numeric Recorder state without modifying SQL/statistics.
+        if saved_value is None and old_value is None:
+            recorder_value = await _async_last_recorder_meter_state(
+                self.hass, self.entity_id
+            )
+            if recorder_value is not None:
+                old_value = recorder_value
                 old_year = now_year
 
         candidates = []
