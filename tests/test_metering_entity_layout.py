@@ -126,12 +126,18 @@ class LayoutTests(unittest.IsolatedAsyncioTestCase):
         }
         self.assertNotIn("async_remove_config_entry_device", definitions)
 
-    def test_diagnostic_export_button_is_private_and_read_only(self):
-        self.assertIn('name="Сохранить диагностику R2"', BUTTON_SOURCE)
-        self.assertIn('"ariston_diagnostics"', BUTTON_SOURCE)
-        self.assertNotIn('config.path("www"', BUTTON_SOURCE)
-        self.assertIn('json.dumps(report', BUTTON_SOURCE)
-        self.assertIn('"r2_physical_unit"', BUTTON_SOURCE)
+    def test_native_download_replaces_custom_file_button(self):
+        """Export uses HA's native diagnostics.py, not a hidden /config file."""
+        diagnostics_source = (ROOT / "diagnostics.py").read_text(encoding="utf-8")
+        self.assertNotIn("AristonExportR2Diagnostics", BUTTON_SOURCE)
+        self.assertIn("async_get_config_entry_diagnostics", diagnostics_source)
+        self.assertIn("async_get_device_diagnostics", diagnostics_source)
+        self.assertIn('"r2_as_physical_unit_histogram"', diagnostics_source)
+        self.assertIn('"api_v2_sequences"', diagnostics_source)
+        self.assertNotIn("config.path(", diagnostics_source)
+        self.assertNotIn('"password"', diagnostics_source)
+        # The exact obsolete button is removed from the entity registry.
+        self.assertIn("Ariston export R2 diagnostics", INIT_SOURCE)
 
     def test_gas_hour_and_month_are_regular_sensors(self):
         required = (
