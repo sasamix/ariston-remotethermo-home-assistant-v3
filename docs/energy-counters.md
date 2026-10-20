@@ -69,8 +69,9 @@ baseline, not an annual electricity total. `energy_counter_source` identifies
 
 The installer accepts the original verified bases and the previous draft,
 backs up the integration, preserves the release's heating-number migration,
-and updates only __init__.py, sensor.py and energy_counter.py. It does not
-modify the manifest, registry, configuration or existing stored counter data.
+and updates only the reviewed source modules (currently __init__.py, sensor.py,
+const.py, button.py; energy_counter.py stays unchanged when identical). It
+does not modify the manifest, configuration or existing stored counter data.
 
 Run `python -m unittest discover -s tests -v`. Tests include the supplied API
 arrays and independent R2 calendar values, duplicate polls, restart, corrections,
@@ -96,20 +97,30 @@ shown as diagnostic attributes. Intra-block gas consumption appears only
 once the current two-hour interval closes, rather than at an unsupported
 per-minute resolution.
 
-GALEVO's metering entities are grouped under the new linked **"<boiler>
-— Энергопотребление"** device. Main gas m³ and kWh counters are ordinary
-Sensors; auxiliary two-hour, per-month and last-month readings remain
-Diagnostics of that metering device. The original physical boiler device
+GALEVO's metering entities are grouped under the linked **"Энергопотребление"**
+device. Six primary gas and electricity counters are always instantiated
+regardless of stale SDK per-channel capability flags; source verification
+still controls whether a new reading is available. The two R2 gas Energy
+Live sensors now share the same platform registration batch as the remaining
+metering entities. Gas two-hour, current-month, average-flow and last-month
+electricity reports are ordinary Sensors, while true system faults and
+communication metadata remain Diagnostics. The original physical boiler device
 retains climate, schedules, water-heater and temperature controls, settings
 and diagnostics. No entity unique ID, entity ID, statistics ID, state class,
 tariff setting or user-enabled/disabled entity is renamed or deleted.
 Only the device association and presentational category change for metering
 entities, so automations that explicitly target the old physical *device*,
-rather than the entity ID, should be reviewed before installing.
+rather than the entity ID, should be reviewed before installing. The
+legacy async_remove_config_entry_device hook and its device Delete control
+were removed. The new "Сохранить диагностику R2" button creates a local
+credential-free JSON snapshot of R2 reports and entity registry status in
+/config/ariston_diagnostics and notifies the user of the private file path.
+The old DHW/heating scenario save buttons remain untouched.
 
 To deploy from the existing backup-first installer, update it to the PR's
 latest revision and run `--check` first. The pinned source commit includes
-four files: `__init__.py`, `sensor.py`, `energy_counter.py`, `const.py`.
+five reviewed files: `__init__.py`, `sensor.py`, `energy_counter.py`,
+`const.py`, `button.py` (unchanged files are skipped).
 Unrecognized on-disk customizations cause an explicit stop, not an overwrite.
 A single Core restart after a confirmed install loads new Python modules.
 
