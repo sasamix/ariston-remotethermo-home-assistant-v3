@@ -88,7 +88,12 @@ namespace = {
     "nonnegative": module.nonnegative,
     "get_native_gas_energy_live_total": lambda device, series: device.value,
     "_LOGGER": logging.getLogger(__name__),
+    "_async_last_recorder_meter_state": None,
 }
+async def fake_recorder_read(hass, entity_id):
+    return getattr(hass, "recorder_baseline", None)
+
+namespace["_async_last_recorder_meter_state"] = fake_recorder_read
 exec(compile(ast.Module(body=[node], type_ignores=[]), "sensor.py", "exec"), namespace)
 Sensor = namespace["AristonGasEnergySensor"]
 
@@ -131,6 +136,15 @@ class GasLivePersistence(unittest.IsolatedAsyncioTestCase):
 
         self.device.value = 930.2
         self.assertEqual(sensor2.native_value, 930.87)
+
+    async def test_restores_old_meter_when_state_is_unavailable(self):
+        sensor = self.make_sensor()
+        sensor.hass.recorder_baseline = 986.97
+        self.device.value = None
+        await sensor.async_added_to_hass()
+        self.assertTrue(sensor.available)
+        self.assertEqual(sensor.native_value, 986.97)
+        self.assertEqual(Storage.persisted["value"], 986.97)
 
     async def test_missing_source_and_invalid_number_hold_value(self):
         sensor = self.make_sensor(930.52)
