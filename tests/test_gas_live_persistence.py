@@ -15,6 +15,7 @@ class CoordinatorEntity:
     def __init__(self, coordinator):
         self.coordinator = coordinator
         self.hass = SimpleNamespace()
+        self.entity_id = "sensor.test_gas_gvs_energy"
 
     async def async_added_to_hass(self):
         pass
