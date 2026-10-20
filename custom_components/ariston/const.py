@@ -629,7 +629,13 @@ def get_native_gas_energy_live_total(device, series):
         previous_values = [numeric_y(item) for item in previous_items]
         if any(value is None for value in previous_values):
             return None
-        if abs(sum(previous_values) - by_day[now.day - 1]) > 0.12:
+        # The R2 physical-unit endpoint marks many responses isRounded=true.
+        # In the real 2026-10-21 00:08 GALEVO snapshot:
+        # PreviousDay Heating blocks add up to 10.32 m³ but the matching
+        # CurrentMonth day-20 cell is 10.00 m³. This is normal R2 rounding,
+        # not a desynchronized day. Keep a tight tolerance for raw reports.
+        tolerance = 0.51 if physical.get("isRounded") is True else 0.02
+        if abs(sum(previous_values) - by_day[now.day - 1]) > tolerance:
             return None
 
     # Ariston R2 uses 12-hour *English* labels, e.g. "12-02 AM",
