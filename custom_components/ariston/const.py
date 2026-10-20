@@ -632,13 +632,17 @@ def get_native_gas_energy_live_total(device, series):
         if abs(sum(previous_values) - by_day[now.day - 1]) > 0.12:
             return None
 
+    # Ariston R2 uses 12-hour *English* labels, e.g. "12-02 AM",
+    # "10-12 PM". The former 24-hour "00-02" comparison silently rejected
+    # every valid CurrentDay report, making live gas totals unavailable.
+    labels = (
+        "12-02 AM", "02-04 AM", "04-06 AM", "06-08 AM",
+        "08-10 AM", "10-12 PM", "12-02 PM", "02-04 PM",
+        "04-06 PM", "06-08 PM", "08-10 PM", "10-12 AM",
+    )
     values = []
-    for index, item in enumerate(day_items):
-        if not isinstance(item, dict):
-            return None
-        start_hour = index * 2
-        end_hour = (start_hour + 2) % 24
-        if item.get("x") != f"{start_hour:02d}-{end_hour:02d}":
+    for label, item in zip(labels, day_items):
+        if not isinstance(item, dict) or item.get("x") != label:
             return None
         value = numeric_y(item)
         if value is None:
