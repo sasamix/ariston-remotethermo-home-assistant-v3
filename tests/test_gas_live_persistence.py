@@ -152,6 +152,36 @@ class GasLivePersistence(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(new_sensor.native_value, 0.01)
         self.assertEqual(Storage.persisted["year"], 2027)
 
+    async def test_single_false_r2_spike_is_not_persisted(self):
+        sensor = self.make_sensor(930.52)
+        await sensor.async_added_to_hass()
+        t0 = datetime(2026, 10, 20, 0, 0, tzinfo=timezone.utc)
+        self.device.r2_gas_snapshot_time = t0
+        self.device.value = 933.08  # one transient cloud increase
+        self.assertEqual(sensor.native_value, 930.52)
+        self.assertEqual(sensor.native_value, 930.52)  # same HTTP snapshot
+        self.assertEqual(Storage.persisted["value"], 930.52)
+
+        # The next independent HTTP report reverted to correct gas usage.
+        self.device.r2_gas_snapshot_time = t0.replace(minute=2)
+        self.device.value = 930.52
+        self.assertEqual(sensor.native_value, 930.52)
+        self.assertEqual(Storage.persisted["value"], 930.52)
+
+    async def test_genuine_increase_needs_two_distinct_snapshots(self):
+        sensor = self.make_sensor(930.52)
+        await sensor.async_added_to_hass()
+        t0 = datetime(2026, 10, 20, 2, 2, tzinfo=timezone.utc)
+        self.device.value = 930.72
+        self.device.r2_gas_snapshot_time = t0
+        self.assertEqual(sensor.native_value, 930.52)
+        self.assertEqual(sensor.native_value, 930.52)
+
+        self.device.r2_gas_snapshot_time = t0.replace(minute=4)
+        self.assertEqual(sensor.native_value, 930.72)
+        self.assertEqual(Storage.persisted["value"], 930.72)
+        self.assertEqual(sensor.native_value, 930.72)
+
     async def test_entity_id_identity_is_unchanged(self):
         sensor = self.make_sensor()
         self.assertEqual(sensor.unique_id, "gateway_r2_gas_energy_live_v3_dhw")
