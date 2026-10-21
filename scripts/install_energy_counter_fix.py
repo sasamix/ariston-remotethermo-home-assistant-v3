@@ -15,7 +15,7 @@ from urllib.request import urlopen
 
 # Pinned GALEVO R2 parsing/Recorder recovery and HA-native diagnostics download.
 # This script can be run without flags: python3 /tmp/install_energy_counter_fix.py
-PINNED_REF = "4da6c217e98fcc455b11b201acec3cb2f4a04971"
+PINNED_REF = "d69f8e226983add24b7fe8e28a9eb27dbe40540e"
 
 
 BASE_HASHES = {
@@ -35,6 +35,7 @@ PRIOR_LIVE_BLOB_SHA1 = {
         "0f0dd83066bdf3477e56b7321a47c435fdcc7f26",
     },
     "sensor.py": {
+        "8375a6b091c984e21f750ed1169423c9c8aa10d1",
         "821cd653ca0981a39c435458267392e510ab1bbc",
         "6cacbb68550f7ed3302207e08cd93bcd4499e12d",
         "6bc21732ef07f67fedee75d90ad0673a9eaa9701",
