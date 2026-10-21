@@ -145,7 +145,7 @@ class MeteringDeviceTests(unittest.TestCase):
         child = self.helper(parent)
         self.assertEqual(child["identifiers"],
                          {("ariston", "SERIAL:energy-metering")})
-        self.assertEqual(child["via_device"], ("ariston", "SERIAL"))
+        self.assertNotIn("via_device", child)
         self.assertEqual(child["name"], "Энергопотребление")
         self.assertEqual(parent["identifiers"], {("ariston", "SERIAL")})
 

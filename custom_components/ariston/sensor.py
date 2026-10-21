@@ -102,7 +102,8 @@ def _metering_device_info(parent):
         return parent
     return {
         "identifiers": {(DOMAIN, f"{primary[1]}:energy-metering")},
-        "via_device": primary,
+        # HA 2026.10 rejects the deprecated via_device DeviceInfo field.
+        # Keep device identifiers stable; existing registry links are retained.
         "manufacturer": parent.get("manufacturer", "Ariston"),
         "model": "GALEVO · учёт энергии",
         "name": "Энергопотребление",
