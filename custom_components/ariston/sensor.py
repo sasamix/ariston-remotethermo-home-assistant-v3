@@ -581,6 +581,15 @@ class AristonCalendarEnergySensor(AristonSensor, RestoreEntity):
         key = hashlib.sha256(self.unique_id.encode()).hexdigest()
         self._store = Store(self.hass, 1, f"{DOMAIN}.energy_counter.{key}")
         saved = await self._store.async_load()
+        # A placeholder from a failed initial read must not suppress Recorder
+        # recovery, nor overwrite the recovered baseline with its stored zero.
+        trusted_saved = isinstance(saved, dict) and (
+            saved.get("baseline_confirmed") is True
+            or nonnegative(saved.get("source")) is not None
+            or (nonnegative(saved.get("value")) or 0.0) > 0
+        )
+        if not trusted_saved:
+            saved = None
         old_state = await self.async_get_last_state()
         if saved is None and (old_state is None or nonnegative(old_state.state) is None):
             # The old AristonSensor did not implement RestoreEntity. Read its
@@ -604,12 +613,14 @@ class AristonCalendarEnergySensor(AristonSensor, RestoreEntity):
             or (
                 saved_meter_value is not None
                 and (
-                    saved_meter_value > 0
+                    saved.get("baseline_confirmed") is True
+                    or saved_meter_value > 0
                     or nonnegative(saved.get("source")) is not None
                 )
             )
         )
         self._counter = EnergyCounter(saved, initial or 0.0)
+        self._counter.baseline_confirmed = self._has_restored_baseline
         if saved is None and old_state:
             # Keep the old reset marker constant through migration. Changing
             # it would tell Recorder to count the whole restored value again.

@@ -559,9 +559,13 @@ def get_native_gas_energy_live_total(device, series):
     if not isinstance(histogram, list):
         return None
 
-    now = dt_util.now()
+    wall_now = dt_util.now()
+    now = getattr(device, "r2_gas_snapshot_time", None) or wall_now
     snapshot_date = getattr(device, "r2_gas_snapshot_date", None)
-    if snapshot_date is not None and snapshot_date != now.date():
+    if snapshot_date is not None and snapshot_date != wall_now.date():
+        return None
+
+    if now.date() != wall_now.date():
         return None
 
     datasets = {}

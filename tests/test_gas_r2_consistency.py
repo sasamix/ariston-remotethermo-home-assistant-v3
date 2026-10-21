@@ -77,6 +77,14 @@ class MidnightGasTests(unittest.TestCase):
     def test_midnight_transient_2_56_not_booked(self):
         self.assertEqual(self.calculate(self.device(first=2.56), "Dhw"), 953.7)
 
+    def test_cached_active_bucket_never_becomes_completed_by_wall_clock(self):
+        Clock.current = datetime(2026, 10, 20, 1, 59, tzinfo=Clock.TZ)
+        device = self.device(first=0.35)
+        device.r2_gas_snapshot_time = Clock.current
+        self.assertEqual(self.calculate(device, "Dhw"), 953.7)
+        Clock.current = datetime(2026, 10, 20, 2, 10, tzinfo=Clock.TZ)
+        self.assertEqual(self.calculate(device, "Dhw"), 953.7)
+
     def test_future_buckets_reject_stale_day(self):
         self.assertIsNone(self.calculate(
             self.device(first=2.56, future=True), "Dhw"))

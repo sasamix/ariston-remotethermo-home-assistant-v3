@@ -28,12 +28,14 @@ PRIOR_LEGACY_INIT_HASH = '7dc0694632a7c310e2007fb7d455b48772489fbb7860bf7ef44875
 # before the boundary fix; reject any other local customizations.
 PRIOR_LIVE_BLOB_SHA1 = {
     "__init__.py": {
+        "ebe0c04faff84c4f5a196f1e395bea6c32ce4737",
         "dab2c882ac078fcd86555fd7a118074a1ee50629",
         "7f2f2d807def8aa745b6bd48e47f98d8983cdbfd",
         "3ac623161a955484770285bb67d0254a780b53e7",
         "0f0dd83066bdf3477e56b7321a47c435fdcc7f26",
     },
     "sensor.py": {
+        "821cd653ca0981a39c435458267392e510ab1bbc",
         "6cacbb68550f7ed3302207e08cd93bcd4499e12d",
         "6bc21732ef07f67fedee75d90ad0673a9eaa9701",
         "79e7b294f5d3fed03f7b088c6a8f015e10d08755",
@@ -42,21 +44,25 @@ PRIOR_LIVE_BLOB_SHA1 = {
         "2a8d6a0a3268cf8d4568e027fe5ab4fb4f8b6fe2",
     },
     "energy_counter.py": {
+        "0848e7ab1b6692868bc2b9f381b812de4cd58fa3",
         "319bac6591bfb3ab743d1a3c1b39df9737ccc4b4",
         "0848e7ab1b6692868bc2b9f381b812de4cd58fa3",
     },
     # Old PR #5 metering parser before the R2 midnight consistency fix.
     "const.py": {
+        "ca53bc8a80fca1a248322ffa46fc6ae9b890da93",
         "52d8808135430d706cc6bea3c2ecc9dbaaf7e8c4",
         "6e6dbb3676b86b0948890346f34f5c445d329acd",
     },
     "button.py": {
+        "93ba5cd9d1be76ab94e8ed30419785fcb5a6c0c2",
         "06086410c4ddeeb9ed42a69009b7ee51f4a74d59",
         "a96e8ce0295b8f8ad5e2e84c8856dc811979bd40",
     },
-    "manifest.json": {"31c9f492c24a6ecc9703260754875f2883651935"},
+    "manifest.json": {
+        "698a4891aeabf0e3bb4acf7d4ece45c1379e1053","31c9f492c24a6ecc9703260754875f2883651935"},
     # HA core-native diagnostics.py is new; don't overwrite unknown local variants.
-    "diagnostics.py": set(),
+    "diagnostics.py": {"cdbf7a4ea7e25aa9e295038c69ada5e0ef01d57b"},
 }
 FILES = (*BASE_HASHES, "energy_counter.py", "const.py", "button.py",
          "manifest.json", "diagnostics.py")
@@ -221,6 +227,8 @@ def run():
             except SystemExit as err:
                 code = err.code if isinstance(err.code, int) else 1
                 if code:
+                    if not isinstance(err.code, int):
+                        print(str(err))
                     print("Установка не выполнена: проверка отклонила файлы.")
             except Exception:
                 code = 1

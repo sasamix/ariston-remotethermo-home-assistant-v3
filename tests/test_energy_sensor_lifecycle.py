@@ -132,6 +132,29 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(sensor.available)
         self.assertIsNone(sensor.native_value)
 
+    async def test_placeholder_store_does_not_block_recorder_recovery(self):
+        from unittest.mock import AsyncMock
+        self.device.r2_kwh_data = None
+        Storage.persisted = {"value": 0.0, "source": None, "year": None}
+        sensor = self.sensor()
+        sensor._async_migration_state = AsyncMock(return_value=SimpleNamespace(
+            state="0.215", attributes={"unit_of_measurement": "kWh",
+                                     "last_reset": "1970-01-01T00:00:00+00:00"}))
+        await sensor.async_added_to_hass()
+        self.assertTrue(sensor.available)
+        self.assertEqual(sensor.native_value, .215)
+        self.assertEqual(Storage.persisted['value'], .215)
+        self.assertEqual(Storage.persisted['last_reset'], "1970-01-01T00:00:00+00:00")
+
+    async def test_confirmed_zero_survives_restart_without_cloud(self):
+        self.device.r2_kwh_data = None
+        first = self.sensor(0.0)
+        await first.async_added_to_hass()
+        second = self.sensor()
+        await second.async_added_to_hass()
+        self.assertTrue(second.available)
+        self.assertEqual(second.native_value, 0.0)
+
     async def test_display_wh_restores_native_kwh(self):
         sensor = self.sensor(77, "Wh")
         await sensor.async_added_to_hass()

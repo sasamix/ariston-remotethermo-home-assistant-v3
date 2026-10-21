@@ -103,11 +103,13 @@ class EnergyCounter:
         self.year = None
         self.last_reset = None
         self.daily = None
+        self.baseline_confirmed = False
         # Last successfully cross-checked API v2 / R2 interval, not the
         # timestamp of the most recent (possibly unverified) HTTP response.
         self.source_interval_end = None
         self.source_snapshot_date = None
         if isinstance(saved, dict):
+            self.baseline_confirmed = saved.get("baseline_confirmed") is True
             if isinstance(saved.get("source_interval_end"), str):
                 self.source_interval_end = saved["source_interval_end"]
             if isinstance(saved.get("source_snapshot_date"), str):
@@ -190,6 +192,7 @@ class EnergyCounter:
     def as_dict(self):
         return {
             "value": self.value,
+            "baseline_confirmed": self.baseline_confirmed,
             "source": self.source,
             "year": self.year,
             "last_reset": self.last_reset,
