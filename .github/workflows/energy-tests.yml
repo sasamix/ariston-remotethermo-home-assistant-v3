@@ -18,6 +18,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install isolated SQL test dependency
+        run: python -m pip install "SQLAlchemy>=2.0,<3"
       - name: Compile integration source
         run: python -m compileall -q custom_components/ariston
       - name: Run accounting and lifecycle tests

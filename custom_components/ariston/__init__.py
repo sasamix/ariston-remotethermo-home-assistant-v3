@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from copy import deepcopy
 
 from datetime import timedelta
@@ -174,7 +175,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 device.dhw_time_program = new_program
 
                 if changed and notify:
-                    coordinator.async_set_updated_data(coordinator.data)
+                    coordinator.async_update_listeners()
 
             except Exception as err:
                 _LOGGER.warning(
@@ -221,7 +222,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     programs[zone] = new_program
 
                 if changed and notify:
-                    coordinator.async_set_updated_data(coordinator.data)
+                    coordinator.async_update_listeners()
 
             except Exception as err:
                 _LOGGER.warning(
@@ -288,7 +289,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN][entry.unique_id][BUS_ERRORS_COORDINATOR] = (
             bus_errors_coordinator
         )
-        await bus_errors_coordinator.async_config_entry_first_refresh()
+        try:
+            await bus_errors_coordinator.async_config_entry_first_refresh()
+        except ConfigEntryNotReady:
+            _LOGGER.warning(
+                "Ariston bus-error list unavailable; continuing setup. "
+                "Diagnostics will retry on the normal polling interval."
+            )
 
         if device.has_metering:
             # Keep API v2 as the primary/normal energy source.
@@ -440,7 +447,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
                 web_logged_in = True
 
+            r2_lock = asyncio.Lock()
+
             async def async_update_physical_gas():
+                async with r2_lock:
+                    await async_update_physical_gas_locked()
+
+            async def async_update_physical_gas_locked():
                 """Fetch Ariston's native asPhysicalUnit metering values."""
                 nonlocal web_logged_in
 
@@ -582,7 +595,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 async_update_energy_with_web_metering,
             )
             hass.data[DOMAIN][entry.unique_id][ENERGY_COORDINATOR] = energy_coordinator
-            await energy_coordinator.async_config_entry_first_refresh()
+            try:
+                await energy_coordinator.async_config_entry_first_refresh()
+            except ConfigEntryNotReady:
+                _LOGGER.warning(
+                    "Ariston energy reports unavailable at startup; "
+                    "continuing with restored meters and scheduled retries."
+                )
 
             # Native R2 gas metering is lightweight and useful for Energy.
             # Refresh it independently every 2 minutes without increasing the
@@ -590,8 +609,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             async def async_r2_gas_metering_timer(_now):
                 try:
                     await async_update_physical_gas()
-                    # Notify Energy sensor listeners immediately with the fresh R2 data.
-                    energy_coordinator.async_set_updated_data(energy_coordinator.data)
+                    # R2 is not an API-v2 success. Notify listeners without
+                    # resetting its ten-minute timer or clearing its error.
+                    energy_coordinator.async_update_listeners()
                 except Exception as err:
                     _LOGGER.warning(
                         "Ariston native R2 gas metering timer unavailable: %r",
@@ -649,7 +669,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 async_set_item_by_id_service,
                 schema=SET_ITEM_BY_ID_SCHEMA,
             )
-    except ConfigEntryAuthFailed:
+    except (ConfigEntryAuthFailed, ConfigEntryNotReady):
         raise
     except Exception as error:
         _LOGGER.exception("")

@@ -67,7 +67,8 @@ namespace = {
     "dt_util": SimpleNamespace(parse_datetime=datetime.fromisoformat),
     "EnergyConverter": SimpleNamespace(convert=lambda value, old, new: value / 1000 if old == "Wh" else value),
 }
-exec(compile(ast.Module(body=[node], type_ignores=[]), "sensor.py", "exec"), namespace)
+mixin = next(n for n in ast.parse(source).body if isinstance(n, ast.ClassDef) and n.name == "DatedAccountingMixin")
+exec(compile(ast.Module(body=[mixin, node], type_ignores=[]), "sensor.py", "exec"), namespace)
 Sensor = namespace["AristonCalendarEnergySensor"]
 
 

@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import traceback
@@ -66,7 +67,10 @@ PRIOR_LIVE_BLOB_SHA1 = {
     "diagnostics.py": {"cdbf7a4ea7e25aa9e295038c69ada5e0ef01d57b"},
 }
 FILES = (*BASE_HASHES, "energy_counter.py", "const.py", "button.py",
-         "manifest.json", "diagnostics.py")
+         "manifest.json", "diagnostics.py", "coordinator.py",
+         "accounting_runtime.py", "accounting_ledger.py", "energy_reconciliation.py",
+         "metering_interval.py", "translations/en.json", "translations/ru.json")
+DEPLOYED_HASHES = {'sensor.py': ['606d63d626e179eadcce9be8e45ac851ebed2929c769546424b26bfea8e126f0', 'c57b2d8330ce358afc660a872ca4cc691962b575cda77872128aa2e279155f40', 'e6264aac644bcb5d1100bc1fbd540e3da45badb87af74f3eb230129ddbae6d88'], 'accounting_ledger.py': ['a6555da2c8f9e302e2c69ac157a8b43baba5b3e8a98b9e507c17686f438ee493'], 'accounting_runtime.py': ['1a569f914b5bdf01589045708460d458415539a2840fc1f0ee585d690e1c62a1', 'a320fa319c1fa47c3e7b410e92ce846ae1a6e8b71d3da08c87eb77ee1e3bcc84'], 'energy_reconciliation.py': ['c2eb510d209933cbc40f6b01b2e3646e0bc121861a3a09187d230b97fe9b48c2'], 'metering_interval.py': ['589504af54f6e793bfcdad56cb3dd07a8808ae618380ce4f0c57836095b70b0e'], 'translations/ru.json': ['529dc6a2557a240c49fbd4484acfccaaf185b1507f636e93b29e787196d217be', 'bbce38468ff635a31a30dbfc1a4578eec901423b7c2263bffad598a7b11e6f7f'], 'translations/en.json': ['376684dfb736bf2fc328a1c0038c5bdcf64c4c66ed6d4002f0b27998a02c2663', '6cfe8af4cd1123d72d245e896510a5dc72d5c75e1d7ce3f1c03c5d49af5d2bf9'], '__init__.py': ['694437b018571b2d8affcb5775512e206df0fd0bf2bf021ba9e5311be1ec2eb1', 'c1f90385cb66a4a31079db1604b6b20305124c521dc6e827cb69659d4fe81403', '64cd86865bb3fa812fcab7c233b37c95f6f7f34a79818b44437bace4bb97600b'], 'coordinator.py': ['0d6756096b9afdf1d292b7dcba21bd6121fd3b3bed7d5538094e523e4651464e'], 'diagnostics.py': ['3be21fd5c7f9a12d87109a3d00951ba0f0110f77ee9ddd03a940c9819b730dea']}
 LEGACY_INIT_HASH = "29d8217fa113a3b2eb4db3b7d85eaaa8526baed67c8aa034d0d94f89fa978dfe"
 LEGACY_INIT_BLOCK = b'        # 0.20.1 incorrectly disabled the two existing System heating-flow\n        # numbers. Undo that migration before their platform is set up, while\n        # respecting any entries the user explicitly disabled.\n        registry = er.async_get(hass)\n        for zone in device.zone_numbers:\n            for label in ("temperature", "offset"):\n                unique_id = (\n                    f"{device.gateway}-Ariston System heating flow "\n                    f"{label} {zone}-{zone}"\n                )\n                entity_id = registry.async_get_entity_id("number", DOMAIN, unique_id)\n                registered = registry.async_get(entity_id) if entity_id else None\n                if (\n                    registered\n                    and registered.config_entry_id == entry.entry_id\n                    and registered.disabled_by == er.RegistryEntryDisabler.INTEGRATION\n                ):\n                    registry.async_update_entity(entity_id, disabled_by=None)\n\n'
 SETUP_MARKER = b'        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)'
@@ -78,12 +82,16 @@ def main():
     source.add_argument("--ref", default=PINNED_REF,
                         help="Full immutable GitHub commit SHA (default: tested update)")
     source.add_argument("--source-dir", type=Path, help="Local checkout (for testing)")
-    parser.add_argument("--config", type=Path, default=Path("/config"))
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--restart", action="store_true", help="Check configuration and restart HA Core")
     parser.add_argument("--check", action="store_true", help="Validate without writing")
     parser.add_argument("--no-pause", action="store_true", help="Do not wait for Enter")
     args = parser.parse_args()
     if args.ref and not re.fullmatch(r"[0-9a-f]{40}", args.ref):
         raise SystemExit("Нужен полный SHA коммита из 40 символов.")
+    if args.config is None:
+        args.config = next((p for p in (Path("/homeassistant"), Path("/config"))
+                            if (p / "custom_components/ariston/manifest.json").is_file()), Path("/config"))
     target = args.config / "custom_components/ariston"
     if not (target / "manifest.json").is_file():
         raise SystemExit(f"Интеграция не найдена: {target}")
@@ -126,7 +134,8 @@ def main():
                 plain_blob = hashlib.sha1(
                     b"blob " + str(len(plain)).encode("ascii") + b"\x00" + plain
                 ).hexdigest()
-                if plain_blob in PRIOR_LIVE_BLOB_SHA1["__init__.py"]:
+                if (plain_blob in PRIOR_LIVE_BLOB_SHA1["__init__.py"]
+                        or hashlib.sha256(old).hexdigest() in DEPLOYED_HASHES["__init__.py"]):
                     data = legacy_data
                     print("Существующая миграция System heating flow сохранена")
         if old == data:
@@ -134,7 +143,7 @@ def main():
             continue
         digest = hashlib.sha256(old).hexdigest() if old is not None else None
         expected = BASE_HASHES.get(name)
-        accepted = {expected, PRIOR_PATCH_HASHES.get(name)}
+        accepted = {expected, PRIOR_PATCH_HASHES.get(name), *DEPLOYED_HASHES.get(name, [])}
         if name == "__init__.py":
             accepted.update({LEGACY_INIT_HASH, PRIOR_LEGACY_INIT_HASH})
         blob_sha1 = (
@@ -166,6 +175,8 @@ def main():
         print("Проверка пройдена. Файлы не изменены:", ", ".join(replacements))
         return
 
+    if args.restart and shutil.which("ha") is None:
+        raise SystemExit("Команда ha не найдена; файлы не изменены.")
     backup = args.config / "ariston_backups" / datetime.now().strftime("energy_%Y%m%d_%H%M%S_%f")
     backup.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(target, backup)
@@ -175,13 +186,17 @@ def main():
         with tempfile.TemporaryDirectory(prefix=".energy-stage-", dir=target.parent) as staging:
             for name, data in replacements.items():
                 path = Path(staging) / name
+                path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(data)
                 path.chmod(0o644)
             for name in replacements:
                 if (target / name).exists() and (target / name).read_bytes() != originals[name]:
                     raise RuntimeError(f"{name} изменился во время установки")
+                (target / name).parent.mkdir(parents=True, exist_ok=True)
                 (Path(staging) / name).replace(target / name)
                 written.append(name)
+        if args.restart:
+            subprocess.run(["ha", "core", "check"], check=True, timeout=180)
     except BaseException:
         for name in reversed(written):
             if originals[name] is None:
@@ -190,7 +205,11 @@ def main():
                 shutil.copy2(backup / name, target / name)
         raise
     print("Установлено:", ", ".join(replacements))
-    print("Версия и ID сохранены. Теперь перезапустите Home Assistant Core.")
+    if args.restart:
+        print("Перезапуск HA Core...", flush=True)
+        subprocess.run(["ha", "core", "restart"], check=True, timeout=180)
+    else:
+        print("Версия и ID сохранены. Теперь перезапустите Home Assistant Core.")
 
 
 class _Tee:

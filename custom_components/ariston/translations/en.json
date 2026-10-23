@@ -36,10 +36,10 @@
   "entity": {
     "sensor": {
       "gas_heating_current_2h_volume": {
-        "name": "Heating gas — current 2 hours"
+        "name": "Heating gas — last completed 2 hours"
       },
       "gas_dhw_current_2h_volume": {
-        "name": "DHW gas — current 2 hours"
+        "name": "DHW gas — last completed 2 hours"
       },
       "gas_heating_current_month": {
         "name": "Heating gas — current month"
@@ -48,10 +48,10 @@
         "name": "DHW gas — current month"
       },
       "gas_heating_current_2h_average_flow": {
-        "name": "Heating gas — average flow for current 2 hours"
+        "name": "Heating gas — average flow for last completed 2 hours"
       },
       "gas_dhw_current_2h_average_flow": {
-        "name": "DHW gas — average flow for current 2 hours"
+        "name": "DHW gas — average flow for last completed 2 hours"
       },
       "heating_circuit_pressure": {
         "name": "Heating circuit pressure"
@@ -102,10 +102,10 @@
         "name": "Ariston DHW gas consumption"
       },
       "gas_heating_hourly_average_power": {
-        "name": "Heating gas — hourly average power"
+        "name": "Heating gas — average power over last completed 2 hours"
       },
       "gas_dhw_hourly_average_power": {
-        "name": "DHW gas — hourly average power"
+        "name": "DHW gas — average power over last completed 2 hours"
       },
       "central_heating_electricity_consumption": {
         "name": "Ariston central heating electricity consumption"

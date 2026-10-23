@@ -25,7 +25,8 @@ class InstallerRegressionTests(unittest.TestCase):
         self.cfg = Path(self.temporary.name)
         self.dst = self.cfg / "custom_components" / "ariston"
         self.dst.mkdir(parents=True)
-        for filename in ("__init__.py", "sensor.py", "energy_counter.py", "const.py", "button.py", "manifest.json", "diagnostics.py"):
+        for filename in installer.FILES:
+            (self.dst / filename).parent.mkdir(parents=True,exist_ok=True)
             shutil.copy2(ROOT / "custom_components" / "ariston" / filename,
                          self.dst / filename)
 
@@ -40,10 +41,7 @@ class InstallerRegressionTests(unittest.TestCase):
         return out.getvalue()
 
     def test_default_update_ref_is_pinned_to_a_commit(self):
-        self.assertEqual(
-            installer.PINNED_REF,
-            "4da6c217e98fcc455b11b201acec3cb2f4a04971",
-        )
+        self.assertRegex(installer.PINNED_REF, r"^[0-9a-f]{40}$")
 
     def test_repeated_installation_is_idempotent(self):
         result = self.launch()

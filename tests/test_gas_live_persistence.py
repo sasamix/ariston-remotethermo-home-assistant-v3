@@ -95,7 +95,8 @@ async def fake_recorder_read(hass, entity_id):
     return getattr(hass, "recorder_baseline", None)
 
 namespace["_async_last_recorder_meter_state"] = fake_recorder_read
-exec(compile(ast.Module(body=[node], type_ignores=[]), "sensor.py", "exec"), namespace)
+mixin = next(n for n in ast.parse(source).body if isinstance(n, ast.ClassDef) and n.name == "DatedAccountingMixin")
+exec(compile(ast.Module(body=[mixin, node], type_ignores=[]), "sensor.py", "exec"), namespace)
 Sensor = namespace["AristonGasEnergySensor"]
 
 

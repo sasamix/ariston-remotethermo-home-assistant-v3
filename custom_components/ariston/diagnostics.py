@@ -14,7 +14,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from .const import DOMAIN, ENERGY_COORDINATOR
+from .const import DOMAIN, ENERGY_COORDINATOR, COORDINATOR, BUS_ERRORS_COORDINATOR
 
 
 _SOURCE_ATTRIBUTES = (
@@ -135,6 +135,15 @@ def _report(hass: HomeAssistant, entry: ConfigEntry, selected_device_id: str | N
     kwh = getattr(device, "r2_kwh_data", None)
     raw = getattr(device, "r2_kwh_raw", None)
     report = {
+        "build": "2026-10-23-startup-polling",
+        "coordinators": {
+            name: {
+                "present": config_data.get(name) is not None,
+                "last_update_success": getattr(config_data.get(name), "last_update_success", None),
+                "last_error_type": (type(config_data[name].last_exception).__name__
+                                    if getattr(config_data.get(name), "last_exception", None) else None),
+            } for name in (COORDINATOR, BUS_ERRORS_COORDINATOR, ENERGY_COORDINATOR)
+        },
         "selected_device_id": selected_device_id,
         "energy_coordinator_present": coordinator is not None,
         "source_timestamps": timestamps,

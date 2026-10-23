@@ -253,6 +253,8 @@ async def async_setup_entry(
             or isinstance(entity, AristonGasEnergySensor)
             for entity in ariston_sensors),
     )
+    from .accounting_runtime import attach
+    await attach(hass, entry, energy_coordinator, ariston_sensors)
     async_add_entities(ariston_sensors)
 
 
@@ -323,7 +325,49 @@ class AristonHeatingZoneSensor(AristonEntity, SensorEntity):
         return None
 
 
-class AristonGasEnergySensor(CoordinatorEntity, SensorEntity, RestoreEntity):
+class DatedAccountingMixin:
+    """Use reconciled values only after the Recorder transaction commits."""
+
+    @property
+    def native_value(self):
+        runtime = getattr(self, "_dated_accounting", None)
+        value = runtime.value(self._dated_key) if runtime else None
+        return value if value is not None else super().native_value
+
+    @property
+    def available(self):
+        runtime = getattr(self, "_dated_accounting", None)
+        if runtime and runtime.value(self._dated_key) is not None:
+            return True
+        return super().available
+
+    @property
+    def state_class(self):
+        runtime = getattr(self, "_dated_accounting", None)
+        if runtime and runtime.value(self._dated_key) is not None:
+            return SensorStateClass.TOTAL
+        return super().state_class
+
+    @property
+    def last_reset(self):
+        runtime = getattr(self, "_dated_accounting", None)
+        if runtime and runtime.value(self._dated_key) is not None:
+            return dt_util.parse_datetime("1970-01-01T00:00:00+00:00")
+        return getattr(super(), "last_reset", None)
+
+    @property
+    def extra_state_attributes(self):
+        attrs = dict(super().extra_state_attributes or {})
+        runtime = getattr(self, "_dated_accounting", None)
+        if runtime and runtime.value(self._dated_key) is not None:
+            for name in ("source_year", "source_total_kwh", "source_sync_status", "source_through_date",
+                         "r2_source_gap_m3", "r2_pending_increase_m3", "last_r2_accepted_at"):
+                attrs.pop(name, None)
+            attrs.update(runtime.attributes(self._dated_key))
+        return attrs
+
+
+class AristonGasEnergySensor(DatedAccountingMixin, CoordinatorEntity, SensorEntity, RestoreEntity):
     """R2 gas m³ accumulator that survives refreshes and HA restarts."""
 
     _attr_device_class = SensorDeviceClass.GAS
@@ -422,6 +466,9 @@ class AristonGasEnergySensor(CoordinatorEntity, SensorEntity, RestoreEntity):
 
     @property
     def native_value(self):
+        runtime = getattr(self, "_dated_accounting", None)
+        if runtime and runtime.value(self._dated_key) is not None:
+            return runtime.value(self._dated_key)
         value = get_native_gas_energy_live_total(
             self.coordinator.device, self._series
         )
@@ -472,6 +519,9 @@ class AristonGasEnergySensor(CoordinatorEntity, SensorEntity, RestoreEntity):
 
     @property
     def available(self):
+        runtime = getattr(self, "_dated_accounting", None)
+        if runtime and runtime.value(self._dated_key) is not None:
+            return True
         # A confirmed reading stays usable through temporary API/R2 failures.
         # New entities still wait for the first actual R2 number.
         return (
@@ -483,6 +533,9 @@ class AristonGasEnergySensor(CoordinatorEntity, SensorEntity, RestoreEntity):
 
     @property
     def extra_state_attributes(self):
+        runtime = getattr(self, "_dated_accounting", None)
+        if runtime and runtime.value(self._dated_key) is not None:
+            return runtime.attributes(self._dated_key)
         """Expose source/accepted discrepancy without changing the counter."""
         source = nonnegative(get_native_gas_energy_live_total(
             self.coordinator.device, self._series
@@ -530,7 +583,38 @@ class AristonSensor(AristonEntity, SensorEntity):
     @property
     def native_value(self):
         """Return value of sensor."""
+        from .metering_interval import reading, SUPPORTED
+        if self.entity_description.key in SUPPORTED and self.device.system_type == SystemType.GALEVO:
+            result = reading(self.device, dt_util.now())
+            return result["values"].get(self.entity_description.key) if result else None
+        previous_keys = {
+            "Electricity consumption for heating last month": "Central heating electricity consumption",
+            "Electricity consumption for water last month": "Domestic hot water electricity consumption",
+        }
+        key = previous_keys.get(self.entity_description.key)
+        if key and self.device.system_type == SystemType.GALEVO:
+            from .energy_counter import electricity_days
+            at = getattr(self.device, "energy_sequences_date", None)
+            if at and at == getattr(self.device, "r2_kwh_snapshot_date", None):
+                days = electricity_days(getattr(self.device, "energy_sequences_snapshot", None),
+                                        getattr(self.device, "r2_kwh_raw", None), at, key)
+                if days is not None:
+                    first = at.replace(day=1).isoformat()
+                    self._verified_previous_month = round(sum(v for d, v in days.items() if d < first), 6)
+            return getattr(self, "_verified_previous_month", None)
         return self.entity_description.get_native_value(self)
+
+    @property
+    def extra_state_attributes(self):
+        attrs = dict(super().extra_state_attributes or {})
+        from .metering_interval import reading, SUPPORTED
+        if self.entity_description.key in SUPPORTED and self.device.system_type == SystemType.GALEVO:
+            result = reading(self.device, dt_util.now())
+            attrs.update(result["attributes"] if result else {
+                "source_status": "waiting_for_matching_r2_reports",
+                "measurement_period": "last_completed_two_hour_interval",
+            })
+        return attrs
 
     @property
     def native_unit_of_measurement(self):
@@ -560,7 +644,7 @@ class AristonSensor(AristonEntity, SensorEntity):
         return None
 
 
-class AristonCalendarEnergySensor(AristonSensor, RestoreEntity):
+class AristonCalendarEnergySensor(DatedAccountingMixin, AristonSensor, RestoreEntity):
     """Existing GALEVO kWh entity backed by a persistent calendar counter.
 
     Preserve the descriptor, unique_id, unit and state_class. In particular,
@@ -665,6 +749,9 @@ class AristonCalendarEnergySensor(AristonSensor, RestoreEntity):
         return None
 
     def _update_counter(self):
+        runtime = getattr(self, "_dated_accounting", None)
+        if runtime and runtime.value(self._dated_key) is not None:
+            return
         if self._counter is None:
             return
         payload = getattr(self.device, "r2_kwh_data", None)
@@ -720,6 +807,9 @@ class AristonCalendarEnergySensor(AristonSensor, RestoreEntity):
 
     @property
     def available(self):
+        runtime = getattr(self, "_dated_accounting", None)
+        if runtime and runtime.value(self._dated_key) is not None:
+            return True
         # A transient coordinator failure or an R2/API-v2 polling mismatch
         # must not turn an already verified, persisted energy value unavailable.
         # An unverified first reading stays unavailable until validated.
@@ -727,6 +817,9 @@ class AristonCalendarEnergySensor(AristonSensor, RestoreEntity):
 
     @property
     def native_value(self):
+        runtime = getattr(self, "_dated_accounting", None)
+        if runtime and runtime.value(self._dated_key) is not None:
+            return runtime.value(self._dated_key)
         if self._counter is None:
             return None
         if self._counter.source is None and not self._has_restored_baseline:
@@ -739,12 +832,18 @@ class AristonCalendarEnergySensor(AristonSensor, RestoreEntity):
 
     @property
     def last_reset(self):
+        runtime = getattr(self, "_dated_accounting", None)
+        if runtime and runtime.value(self._dated_key) is not None:
+            return dt_util.parse_datetime("1970-01-01T00:00:00+00:00")
         if self._counter and self._counter.last_reset:
             return dt_util.parse_datetime(self._counter.last_reset)
         return None
 
     @property
     def extra_state_attributes(self):
+        runtime = getattr(self, "_dated_accounting", None)
+        if runtime and runtime.value(self._dated_key) is not None:
+            return runtime.attributes(self._dated_key)
         attrs = dict(super().extra_state_attributes or {})
         daily = self.entity_description.key in DAILY_KEYS
         attrs["energy_counter_source"] = (

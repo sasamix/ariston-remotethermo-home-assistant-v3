@@ -3,6 +3,8 @@
 import ast
 from dataclasses import dataclass, replace
 import logging
+import sys
+from types import ModuleType
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -81,7 +83,13 @@ class LayoutTests(unittest.IsolatedAsyncioTestCase):
         # Parent must be included even if the energy source is independent.
         descriptors.append(Desc("NORMAL_PARENT", "coordinator"))
 
+        async def attach(*args):
+            pass
+        dependency=ModuleType("layout_test_package.accounting_runtime")
+        dependency.attach=attach
+        sys.modules[dependency.__name__]=dependency
         namespace = {
+            "__package__":"layout_test_package",
             "HomeAssistant": object, "ConfigEntry": object,
             "DeviceDataUpdateCoordinator": object,
             "ARISTON_SENSOR_TYPES": descriptors,
