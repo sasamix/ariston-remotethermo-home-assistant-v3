@@ -72,25 +72,40 @@ class SetupTests(unittest.IsolatedAsyncioTestCase):
             hass.config_entries.async_forward_entry_setups.assert_not_awaited()
 
 class PollingTests(unittest.IsolatedAsyncioTestCase):
-    async def test_r2_does_not_postpone_api_poll_or_clear_api_error(self):
+    def _function(self, name, namespace):
         tree=ast.parse((ROOT/'__init__.py').read_text())
-        timer=next(n for n in ast.walk(tree) if isinstance(n,ast.AsyncFunctionDef) and n.name=='async_r2_gas_metering_timer')
-        class Coordinator:
-            now=0;due=10;polls=0;last_update_success=False;data=None
-            def async_update_listeners(self):pass
-            def async_set_updated_data(self,data):
-                self.due=self.now+10;self.last_update_success=True
-            def tick(self,now):
-                self.now=now
-                if now>=self.due:self.polls+=1;self.due=now+10
-        c=Coordinator()
-        ns={'async_update_physical_gas':AsyncMock(),'energy_coordinator':c,'_LOGGER':logging.getLogger('test.polling')}
-        exec(compile(ast.Module(body=[timer],type_ignores=[]),'timer','exec'),ns)
-        for minute in range(1,31):
-            c.tick(minute)
-            if minute%2==0:await ns['async_r2_gas_metering_timer'](None)
-        self.assertEqual(c.polls,3)
-        self.assertFalse(c.last_update_success)
+        node=next(n for n in ast.walk(tree) if isinstance(n,ast.AsyncFunctionDef) and n.name==name)
+        exec(compile(ast.Module(body=[node],type_ignores=[]),name,'exec'),namespace)
+        return namespace[name]
+
+    async def test_weekly_programs_refresh_at_most_every_ten_minutes(self):
+        from datetime import datetime, timezone
+        clock={'now':datetime(2026,10,24,6,0,tzinfo=timezone.utc)}
+        dhw,heating,state=AsyncMock(),AsyncMock(),AsyncMock(return_value='ok')
+        ns={'async_update_state_resilient':state,'async_update_dhw_program':dhw,
+            'async_update_heating_programs':heating,'program_refresh':{'at':None},
+            'TIME_PROGRAM_REFRESH':timedelta(minutes=10),
+            'dt_util':NS(utcnow=lambda:clock['now'])}
+        update=self._function('async_update_state_with_time_programs',ns)
+        for minute in range(0,31,3):   # normal 3-minute state polling
+            clock['now']=datetime(2026,10,24,6,minute,tzinfo=timezone.utc)
+            self.assertEqual(await update(),'ok')
+        self.assertEqual(state.await_count,11)
+        self.assertEqual(dhw.await_count,3)      # minutes 0, 12, 24
+        self.assertEqual(heating.await_count,3)
+
+    async def test_energy_refresh_reads_r2_and_survives_r2_failure(self):
+        from datetime import datetime, timezone
+        now=datetime(2026,10,24,6,5,tzinfo=timezone.utc)
+        device=NS(consumptions_sequences=[{'k':7}])
+        gas=AsyncMock(side_effect=RuntimeError('R2 down'))
+        ns={'original_async_update_energy':AsyncMock(return_value='api'),'device':device,
+            'async_update_physical_gas':gas,'deepcopy':deepcopy,'_LOGGER':logging.getLogger('test.polling'),
+            'dt_util':NS(now=lambda:now)}
+        update=self._function('async_update_energy_with_web_metering',ns)
+        self.assertEqual(await update(),'api')
+        gas.assert_awaited_once()
+        self.assertEqual(device.energy_sequences_time,now)
 
     async def test_r2_requests_are_serialized(self):
         tree=ast.parse((ROOT/'__init__.py').read_text())

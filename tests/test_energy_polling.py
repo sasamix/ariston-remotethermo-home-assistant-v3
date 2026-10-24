@@ -25,12 +25,19 @@ class EnergyPollingTests(unittest.TestCase):
                 candidates.append(node)
         self.assertEqual(len(candidates), 1)
 
-    def test_r2_poll_independent_and_two_minute_cadence(self):
+    def test_no_high_frequency_cloud_timers(self):
+        """R2 and weekly programs must not have their own fast timers."""
         source = (Path(__file__).parents[1] /
                   "custom_components/ariston/__init__.py").read_text()
-        self.assertIn("async_r2_gas_metering_timer", source)
-        self.assertIn("timedelta(minutes=2)", source)
-
+        tree = ast.parse(source)
+        intervals = [ast.unparse(node.args[2]) for node in ast.walk(tree)
+                     if isinstance(node, ast.Call)
+                     and ast.unparse(node.func) == "async_track_time_interval"]
+        self.assertEqual(intervals, [])
+        self.assertNotIn("async_r2_gas_metering_timer", source)
+        energy = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef)
+                      and n.name == "async_update_energy_with_web_metering")
+        self.assertIn("await async_update_physical_gas()", ast.unparse(energy))
 
 if __name__ == "__main__":
     unittest.main()

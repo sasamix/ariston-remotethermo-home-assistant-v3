@@ -741,7 +741,9 @@ ARISTON_SENSOR_TYPES: list[AristonSensorEntityDescription] = [
             entity.device, "Dhw"
         ),
     ),
-    # Native R2 gas current month totals (server physical unit: m³)
+    # Native R2 gas current month totals (server physical unit: m³). They
+    # restart from zero every month: TOTAL_INCREASING lets Recorder treat that
+    # drop as a meter reset instead of negative consumption.
     # Native R2 cumulative gas sensors for Home Assistant Energy Dashboard.
             AristonSensorEntityDescription(
         key="Central heating gas current month native",
@@ -750,7 +752,7 @@ ARISTON_SENSOR_TYPES: list[AristonSensorEntityDescription] = [
         translation_key="gas_heating_current_month",
         icon="mdi:meter-gas",
         entity_category=EntityCategory.DIAGNOSTIC,
-        state_class=SensorStateClass.TOTAL,
+        state_class=SensorStateClass.TOTAL_INCREASING,
         device_class=SensorDeviceClass.GAS,
         native_unit_of_measurement=UnitOfVolume.CUBIC_METERS,
         device_features=[CustomDeviceFeatures.HAS_DHW],
@@ -766,7 +768,7 @@ ARISTON_SENSOR_TYPES: list[AristonSensorEntityDescription] = [
         translation_key="gas_dhw_current_month",
         icon="mdi:meter-gas",
         entity_category=EntityCategory.DIAGNOSTIC,
-        state_class=SensorStateClass.TOTAL,
+        state_class=SensorStateClass.TOTAL_INCREASING,
         device_class=SensorDeviceClass.GAS,
         native_unit_of_measurement=UnitOfVolume.CUBIC_METERS,
         device_features=[CustomDeviceFeatures.HAS_DHW],

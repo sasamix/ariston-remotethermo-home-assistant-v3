@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.20.5 — 2026-10-24
+
+- About 80 % fewer cloud requests: weekly DHW/heating programs are refreshed at most
+  every 10 minutes together with the normal state poll (was every 30 seconds plus every
+  poll); HA still re-reads a program right after writing it. The separate 2-minute R2
+  timer is removed; R2 metering is read with API v2 on every energy refresh (≤10 min
+  for GALEVO), so both snapshots stay in the same two-hour interval.
+- Gas cost statistics no longer count the newest two-hour interval twice while it is
+  waiting for the next reconciliation: the newest hourly cost row takes the cost
+  entity's current state and reset marker as Recorder's baseline.
+- "Gas — current month" sensors use `total_increasing`, so the monthly restart is a
+  meter reset instead of negative consumption in long-term statistics.
+- 0.20.4 was published automatically with the one-off `repair_history` service; that
+  service is not part of the integration and is absent from 0.20.5.
+
 ## 0.20.3 — 2026-10-24
 
 Release of the work merged to `main` on 2026-10-21 … 2026-10-24 (PR #5). Until this
