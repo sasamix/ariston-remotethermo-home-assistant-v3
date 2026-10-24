@@ -1,0 +1,99 @@
+name: Auto release
+
+# Publishes a GitHub release (and tag) whenever the integration version in
+# manifest.json changes on main and no release for that version exists yet.
+# The release is created only after both test suites pass. HACS installs the
+# latest release by default, so this keeps HACS in step with main.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "custom_components/ariston/manifest.json"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      exists: ${{ steps.v.outputs.exists }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(python3 -c "import json; print(json.load(open('custom_components/ariston/manifest.json'))['version'])")
+          tag="v${version}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release ${tag} already exists; nothing to publish."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  tests:
+    needs: version
+    if: needs.version.outputs.exists == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install "SQLAlchemy>=2.0,<3"
+      - run: python -m compileall -q custom_components/ariston
+      - run: python -m unittest discover -s tests -v
+
+  home-assistant-compatibility:
+    needs: version
+    if: needs.version.outputs.exists == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: python -m pip install "homeassistant==2026.10.2" "ariston==0.19.9"
+      - run: python -m unittest discover -s tests_ha -v
+      - run: python scripts/build_integration_package.py
+
+  release:
+    needs: [version, tests, home-assistant-compatibility]
+    if: needs.version.outputs.exists == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract release notes from CHANGELOG
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          version = os.environ["TAG"].lstrip("v")
+          text = open("CHANGELOG.md", encoding="utf-8").read()
+          match = re.search(rf"^## {re.escape(version)}\b.*?$\n(.*?)(?=^## |\Z)", text, re.S | re.M)
+          notes = match.group(1).strip() if match else f"Release {version}."
+          open("release-notes.md", "w", encoding="utf-8").write(notes + "\n")
+          PY
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          gh release create "${TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
+            --title "${TAG}" \
+            --notes-file release-notes.md \
+            --latest
