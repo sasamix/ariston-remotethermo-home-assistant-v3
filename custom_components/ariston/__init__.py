@@ -49,7 +49,10 @@ from .const import (
     DOMAIN,
     ENERGY_COORDINATOR,
     ENERGY_SCAN_INTERVAL,
+    DEFAULT_TIME_PROGRAM_SCAN_INTERVAL_SECONDS,
+    TIME_PROGRAM_SCAN_INTERVAL,
 )
+from .cloud_pacing import AdaptivePacer
 from .coordinator import DeviceDataUpdateCoordinator
 from .dhw_scenarios import async_setup_dhw_scenario_manager
 from .heating_scenarios import async_setup_heating_scenario_managers
@@ -69,7 +72,11 @@ PLATFORMS: list[str] = [
 ]
 
 SERVICE_SET_ITEM_BY_ID = "set_item_by_id"
-TIME_PROGRAM_REFRESH = timedelta(minutes=10)
+PACING_TICK = timedelta(seconds=30)  # local due-check only, no request
+# After each two-hour boundary Ariston publishes the finished interval some
+# minutes later. Poll energy faster until it arrives, then fall back.
+ENERGY_BURST_INTERVAL = timedelta(minutes=2)
+ENERGY_BURST_WINDOW = timedelta(minutes=40)
 ATTR_ITEM_ID = "item_id"
 ATTR_ZONE = "zone"
 ATTR_VALUE = "value"
@@ -183,6 +190,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     "Unable to update Ariston DHW time program: %r",
                     err,
                 )
+                return err
+            return None
 
         async def async_update_heating_programs(notify=False):
             """Update all reported heating-zone time programs."""
@@ -230,23 +239,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     "Unable to update Ariston heating time programs: %r",
                     err,
                 )
+                return err
+            return None
 
-        # Weekly programs change only when someone edits them. HA re-reads a
-        # program right after writing it, so a slow refresh only has to catch
-        # edits made in the mobile app. Polling them every 30 seconds was the
-        # largest share of all cloud requests.
-        program_refresh = {"at": None}
+        # Weekly programs: refreshed on their own adaptive schedule
+        # (configurable, default 3 minutes), backing off while the cloud is
+        # overloaded. HA re-reads a program right after writing it, so this
+        # only has to catch edits made in the mobile app.
+        program_pacer = AdaptivePacer(timedelta(seconds=entry.options.get(
+            TIME_PROGRAM_SCAN_INTERVAL, DEFAULT_TIME_PROGRAM_SCAN_INTERVAL_SECONDS)))
 
-        async def async_update_state_with_time_programs():
-            """Update Ariston state; weekly programs at most every 10 minutes."""
-            result = await async_update_state_resilient()
+        async def async_refresh_time_programs(notify=True):
+            """Fetch DHW and heating programs once and record the outcome."""
+            errors = [error for error in (
+                await async_update_dhw_program(notify),
+                await async_update_heating_programs(notify),
+            ) if error is not None]
             now = dt_util.utcnow()
-            last = program_refresh["at"]
-            if last is None or now - last >= TIME_PROGRAM_REFRESH:
-                program_refresh["at"] = now
-                await async_update_dhw_program()
-                await async_update_heating_programs()
-            return result
+            if errors:
+                program_pacer.failure(now, errors[0])
+            else:
+                program_pacer.success(now)
 
         scan_interval_seconds = entry.options.get(
             CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL_SECONDS
@@ -256,7 +269,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             device,
             scan_interval_seconds,
             COORDINATOR,
-            async_update_state_with_time_programs,
+            async_update_state_resilient,
         )
 
         hass.data.setdefault(DOMAIN, {}).setdefault(
@@ -269,8 +282,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # returns the weekly plan but not user-defined scenario names from the
         # mobile app, so HA stores only the local name -> schedule mapping.
         if device.system_type == SystemType.GALEVO:
+            await async_refresh_time_programs(notify=False)
             await async_setup_dhw_scenario_manager(hass, entry, coordinator)
             await async_setup_heating_scenario_managers(hass, entry, coordinator)
+
+            async def async_time_program_tick(_now):
+                # Local check only; a request is made when the pacer is due.
+                if program_pacer.due(dt_util.utcnow()):
+                    await async_refresh_time_programs()
+
+            entry.async_on_unload(
+                async_track_time_interval(hass, async_time_program_tick, PACING_TICK)
+            )
 
         bus_errors_scan_interval_seconds = entry.options.get(
             BUS_ERRORS_SCAN_INTERVAL, DEFAULT_BUS_ERRORS_SCAN_INTERVAL_SECONDS
@@ -549,6 +572,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 # Keep the preceding snapshot with its original date instead.
                 _LOGGER.info("Ariston native physical gas metering updated")
 
+            # R2 is read on every energy refresh unless it reported overload.
+            r2_pacer = AdaptivePacer(timedelta(minutes=1))
+            energy_burst = {"block": None, "start": None, "last": None, "arrived": False}
+
+            def energy_fingerprint():
+                physical = getattr(device, "gas_physical_unit_data", None)
+                return repr((
+                    physical.get("histogramData") if isinstance(physical, dict) else None,
+                    getattr(device, "energy_sequences_snapshot", None),
+                ))
+
+            def schedule_energy_burst():
+                """Poll every 2 minutes after a boundary until new data arrives."""
+                now = dt_util.now()
+                block = (now.date(), now.hour // 2)
+                current = energy_fingerprint()
+                if energy_burst["block"] != block:
+                    energy_burst.update(block=block, start=energy_burst["last"], arrived=False)
+                if energy_burst["start"] is not None and current != energy_burst["start"]:
+                    energy_burst["arrived"] = True
+                energy_burst["last"] = current
+                block_start = now.replace(hour=(now.hour // 2) * 2, minute=0, second=0, microsecond=0)
+                burst = (device.system_type == SystemType.GALEVO
+                         and not energy_burst["arrived"]
+                         and now - block_start < ENERGY_BURST_WINDOW)
+                coordinator_ = hass.data[DOMAIN][entry.unique_id].get(ENERGY_COORDINATOR)
+                if isinstance(coordinator_, DeviceDataUpdateCoordinator):
+                    coordinator_.preferred_interval = ENERGY_BURST_INTERVAL if burst else None
+
             async def async_update_energy_with_web_metering():
                 """Refresh normal API energy plus optional native R2 m³ data."""
                 api_started = dt_util.now()
@@ -561,16 +613,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     device.energy_sequences_time = api_finished
 
 
-                try:
-                    await async_update_physical_gas()
-                except Exception as err:
-                    # Important: a web-login problem must never break normal Ariston
-                    # sensors or the API-v2 energy coordinator.
-                    _LOGGER.warning(
-                        "Ariston native R2 gas metering unavailable: %r",
-                        err,
-                    )
+                if r2_pacer.due(dt_util.utcnow()):
+                    try:
+                        await async_update_physical_gas()
+                        r2_pacer.success(dt_util.utcnow())
+                    except Exception as err:
+                        # Important: a web-login problem must never break normal Ariston
+                        # sensors or the API-v2 energy coordinator.
+                        r2_pacer.failure(dt_util.utcnow(), err)
+                        _LOGGER.warning(
+                            "Ariston native R2 gas metering unavailable (next try in %s): %r",
+                            r2_pacer.interval, err,
+                        )
 
+                schedule_energy_burst()
                 return result
 
             energy_interval_minutes = entry.options.get(

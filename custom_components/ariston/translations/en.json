@@ -27,7 +27,8 @@
           "extra_energy_features": "Extra energy related entities",
           "scan_interval": "Zone scan interval (seconds)",
           "energy_scan_interval": "Energy scan interval (minutes)",
-          "bus_errors_scan_interval": "Bus errors scan interval (seconds)"
+          "bus_errors_scan_interval": "Bus errors scan interval (seconds)",
+          "time_program_scan_interval": "Weekly schedules scan interval (seconds, min 60; slows down automatically on cloud errors)"
         },
         "title": "Configure Ariston"
       }

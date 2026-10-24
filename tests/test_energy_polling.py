@@ -33,7 +33,11 @@ class EnergyPollingTests(unittest.TestCase):
         intervals = [ast.unparse(node.args[2]) for node in ast.walk(tree)
                      if isinstance(node, ast.Call)
                      and ast.unparse(node.func) == "async_track_time_interval"]
-        self.assertEqual(intervals, [])
+        # Only the local 30-second due-check; it makes no request by itself.
+        self.assertEqual(intervals, ["PACING_TICK"])
+        tick = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef)
+                    and n.name == "async_time_program_tick")
+        self.assertIn("if program_pacer.due(", ast.unparse(tick))
         self.assertNotIn("async_r2_gas_metering_timer", source)
         energy = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef)
                       and n.name == "async_update_energy_with_web_metering")

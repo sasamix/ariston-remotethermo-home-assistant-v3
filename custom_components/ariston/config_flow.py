@@ -25,6 +25,9 @@ from .const import (
     DEFAULT_BUS_ERRORS_SCAN_INTERVAL_SECONDS,
     DEFAULT_ENERGY_SCAN_INTERVAL_MINUTES,
     DEFAULT_SCAN_INTERVAL_SECONDS,
+    DEFAULT_TIME_PROGRAM_SCAN_INTERVAL_SECONDS,
+    MIN_TIME_PROGRAM_SCAN_INTERVAL_SECONDS,
+    TIME_PROGRAM_SCAN_INTERVAL,
     DOMAIN,
     ENERGY_SCAN_INTERVAL,
 )
@@ -178,6 +181,9 @@ class AristonOptionsFlow(config_entries.OptionsFlow):
         bus_errors_scan_interval = options.get(
             BUS_ERRORS_SCAN_INTERVAL, DEFAULT_BUS_ERRORS_SCAN_INTERVAL_SECONDS
         )
+        time_program_scan_interval = options.get(
+            TIME_PROGRAM_SCAN_INTERVAL, DEFAULT_TIME_PROGRAM_SCAN_INTERVAL_SECONDS
+        )
 
         return self.async_show_form(
             step_id="init",
@@ -195,6 +201,13 @@ class AristonOptionsFlow(config_entries.OptionsFlow):
                         BUS_ERRORS_SCAN_INTERVAL,
                         default=bus_errors_scan_interval,
                     ): int,
+                    vol.Optional(
+                        TIME_PROGRAM_SCAN_INTERVAL,
+                        default=time_program_scan_interval,
+                    ): vol.All(
+                        vol.Coerce(int),
+                        vol.Range(min=MIN_TIME_PROGRAM_SCAN_INTERVAL_SECONDS, max=3600),
+                    ),
                 }
             ),
             last_step=True,

@@ -28,7 +28,8 @@
           "extra_energy_features": "Extra energy related entities",
           "scan_interval": "Zone Scan Interval (seconds)",
           "energy_scan_interval": "Energy Scan Interval (minutes)",
-          "bus_errors_scan_interval": "Bus Errors Scan Interval (seconds)"
+          "bus_errors_scan_interval": "Bus Errors Scan Interval (seconds)",
+          "time_program_scan_interval": "Weekly schedules scan interval (seconds, min 60; slows down automatically on cloud errors)"
         }
       }
     }
