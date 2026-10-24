@@ -113,7 +113,7 @@ def main():
             compile(data, name, "exec")
         elif name == "manifest.json":
             manifest = json.loads(data)
-            if manifest.get("domain") != "ariston" or not str(manifest.get("version", "")).startswith("0.20."):
+            if manifest.get("domain") != "ariston" or manifest.get("version") not in ("0.20.2", "0.20.3"):
                 raise SystemExit("Неожиданный manifest Ariston; ничего не изменено")
         path = target / name
         old = path.read_bytes() if path.exists() else None

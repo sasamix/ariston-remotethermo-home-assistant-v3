@@ -135,7 +135,7 @@ def _report(hass: HomeAssistant, entry: ConfigEntry, selected_device_id: str | N
     kwh = getattr(device, "r2_kwh_data", None)
     raw = getattr(device, "r2_kwh_raw", None)
     report = {
-        "build": "2026-10-24-history-repair",
+        "build": "2026-10-24-background-accounting",
         "coordinators": {
             name: {
                 "present": config_data.get(name) is not None,

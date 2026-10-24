@@ -61,21 +61,3 @@ set_item_by_id:
       example: "1"
       selector:
         text:
-repair_history:
-  name: Repair history before accounting start
-  description: >-
-    Rewrite Energy statistics from start_date up to the dated-accounting start
-    using Ariston's daily reports. Keeps a JSON backup. Defaults to a dry run.
-  fields:
-    start_date:
-      name: Start date
-      description: First day to repair (YYYY-MM-DD). Ariston reports cover the previous and current month.
-      required: true
-      selector:
-        date:
-    dry_run:
-      name: Dry run
-      description: Only report what would change.
-      default: true
-      selector:
-        boolean:
