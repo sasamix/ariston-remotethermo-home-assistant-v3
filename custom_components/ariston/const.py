@@ -3,6 +3,7 @@
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 import sys
+import math
 from typing import Any, Final
 
 from ariston.const import (
@@ -545,85 +546,126 @@ def get_native_gas_current_year_total(device, series):
 
 
 def get_native_gas_energy_live_total(device, series):
-    """Return a finer current-year cumulative native R2 gas total, m³.
+    """Read calendar-consistent R2 gas, excluding unclosed two-hour buckets.
 
-    Uses completed months from CurrentYear, completed days from CurrentMonth,
-    and today's 2-hour CurrentDay buckets. This preserves a cumulative counter
-    suitable for Home Assistant Energy while allowing intra-day updates.
+    The cloud may momentarily mix yesterday's CurrentDay with today's
+    CurrentMonth after midnight. Validate previous-day continuity and never
+    interpret future or in-progress two-hour buckets as finished gas usage.
     """
     physical = getattr(device, "gas_physical_unit_data", None)
     if not isinstance(physical, dict):
         return None
-
-    histogram = physical.get("histogramData", [])
+    histogram = physical.get("histogramData")
     if not isinstance(histogram, list):
+        return None
+
+    wall_now = dt_util.now()
+    now = getattr(device, "r2_gas_snapshot_time", None) or wall_now
+    snapshot_date = getattr(device, "r2_gas_snapshot_date", None)
+    if snapshot_date is not None and snapshot_date != wall_now.date():
+        return None
+
+    if now.date() != wall_now.date():
         return None
 
     datasets = {}
     for dataset in histogram:
-        if (
-            isinstance(dataset, dict)
-            and dataset.get("tab") == "ConsumedGas"
-            and dataset.get("series") == series
-        ):
-            datasets[dataset.get("period")] = dataset.get("items", [])
+        if not isinstance(dataset, dict):
+            continue
+        if dataset.get("tab") != "ConsumedGas" or dataset.get("series") != series:
+            continue
+        period = dataset.get("period")
+        if period in datasets:
+            return None
+        datasets[period] = dataset.get("items")
 
     year_items = datasets.get("CurrentYear")
     month_items = datasets.get("CurrentMonth")
     day_items = datasets.get("CurrentDay")
     if not all(isinstance(items, list) for items in (year_items, month_items, day_items)):
         return None
-    if len(year_items) < 12:
+    if len(year_items) < 12 or len(day_items) != 12:
         return None
-
-    now = dt_util.now()
-    current_month_index = now.month - 1
-    current_day = now.day
 
     def numeric_y(item):
         if not isinstance(item, dict):
             return None
-        value = item.get("y")
-        if value is None:
-            return None
         try:
-            value = float(value)
-        except (TypeError, ValueError):
+            value = float(item["y"])
+        except (KeyError, TypeError, ValueError):
             return None
-        return value if value >= 0 else None
+        return value if math.isfinite(value) and value >= 0 else None
 
-    # Completed calendar months only.
     total = 0.0
-    for index in range(current_month_index):
+    # Closed months only. CurrentYear's current-month cell is not added.
+    for index in range(now.month - 1):
         value = numeric_y(year_items[index])
         if value is None:
             return None
         total += value
 
-    # Completed days of the current month only.
+    by_day = {}
     for item in month_items:
+        if not isinstance(item, dict):
+            return None
         try:
             day_number = int(str(item.get("x")))
-        except (AttributeError, TypeError, ValueError):
-            continue
-        if day_number >= current_day:
-            continue
-        value = numeric_y(item)
-        if value is not None:
-            total += value
-
-    # Today's 2-hour buckets. R2 supplies 12 physical-volume buckets.
-    usable_day_values = 0
-    for item in day_items:
+        except (TypeError, ValueError):
+            return None
+        if not 1 <= day_number <= 31 or day_number in by_day:
+            return None
         value = numeric_y(item)
         if value is None:
-            continue
-        total += value
-        usable_day_values += 1
+            return None
+        by_day[day_number] = value
 
-    if usable_day_values == 0:
+    for day_number in range(1, now.day):
+        if day_number not in by_day:
+            return None
+        total += by_day[day_number]
+
+    # R2's previous-day two-hour series and current-month day must agree.
+    # An out-of-phase cloud calendar is NOT a valid cumulative snapshot.
+    if now.day > 1:
+        previous_items = datasets.get("PreviousDay")
+        if not isinstance(previous_items, list) or len(previous_items) != 12:
+            return None
+        previous_values = [numeric_y(item) for item in previous_items]
+        if any(value is None for value in previous_values):
+            return None
+        # The R2 physical-unit endpoint marks many responses isRounded=true.
+        # In the real 2026-10-21 00:08 GALEVO snapshot:
+        # PreviousDay Heating blocks add up to 10.32 m³ but the matching
+        # CurrentMonth day-20 cell is 10.00 m³. This is normal R2 rounding,
+        # not a desynchronized day. Keep a tight tolerance for raw reports.
+        tolerance = 0.51 if physical.get("isRounded") is True else 0.02
+        if abs(sum(previous_values) - by_day[now.day - 1]) > tolerance:
+            return None
+
+    # Ariston R2 uses 12-hour *English* labels, e.g. "12-02 AM",
+    # "10-12 PM". The former 24-hour "00-02" comparison silently rejected
+    # every valid CurrentDay report, making live gas totals unavailable.
+    labels = (
+        "12-02 AM", "02-04 AM", "04-06 AM", "06-08 AM",
+        "08-10 AM", "10-12 PM", "12-02 PM", "02-04 PM",
+        "04-06 PM", "06-08 PM", "08-10 PM", "10-12 AM",
+    )
+    values = []
+    for label, item in zip(labels, day_items):
+        if not isinstance(item, dict) or item.get("x") != label:
+            return None
+        value = numeric_y(item)
+        if value is None:
+            return None
+        values.append(value)
+
+    completed_buckets = now.hour // 2
+    # Non-zero future buckets mean the server is still returning another day.
+    # The in-progress bucket is ignored until its interval has ended.
+    if any(value > 0 for value in values[completed_buckets + 1:]):
         return None
 
+    total += sum(values[:completed_buckets])
     return round(total, 3)
 
 

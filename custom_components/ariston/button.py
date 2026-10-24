@@ -1,4 +1,4 @@
-"""Button entity for saving the current Ariston DHW schedule."""
+"""Button entities for saving current Ariston schedules."""
 
 from __future__ import annotations
 

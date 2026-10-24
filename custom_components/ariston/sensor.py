@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
+from functools import partial
+import hashlib
 import logging
+
+from ariston import SystemType
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -16,6 +20,10 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature, UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
+from homeassistant.util.unit_conversion import EnergyConverter
 
 from .const import (
     ARISTON_SENSOR_TYPES,
@@ -27,8 +35,80 @@ from .const import (
 from .coordinator import DeviceDataUpdateCoordinator
 from .entity import AristonEntity
 from .heating_scenarios import HEATING_SCENARIO_MANAGERS
+from .energy_counter import ENERGY_SOURCES, DAILY_KEYS, EnergyCounter, calendar_total, electricity_periods, nonnegative
 
 _LOGGER = logging.getLogger(__name__)
+
+
+async def _async_last_recorder_meter_state(hass, entity_id):
+    """Get an existing numeric Recorder state without creating a reset.
+
+    This recovery only runs if both Store and RestoreEntity have no usable
+    value. The latest 5-minute/hourly statistics are read-only and usually
+    available even when HA last_state is 'unavailable'. Do not fall back to
+    guessed zeros or alter the stored Recorder sum.
+    """
+    if "recorder" not in hass.config.components:
+        return None
+    from homeassistant.components.recorder import get_instance
+    from homeassistant.components.recorder.statistics import (
+        get_last_statistics, get_last_short_term_statistics,
+    )
+    recorder = get_instance(hass)
+    for getter in (get_last_short_term_statistics, get_last_statistics):
+        try:
+            report = await recorder.async_add_executor_job(
+                getter, hass, 1, entity_id, True, {"state"}
+            )
+            for row in report.get(entity_id, []):
+                value = nonnegative(row.get("state"))
+                if value is not None:
+                    return value
+        except Exception:
+            _LOGGER.exception(
+                "Ariston gas Recorder baseline read failed for %s", entity_id
+            )
+    return None
+
+
+# Ordinary readings shown in the meter device's Sensors section, not Diagnostics.
+# These identities are untouched; only their entity_category changes.
+METERING_READING_KEYS = frozenset({
+    "Central heating gas current 2h volume",
+    "Domestic hot water gas current 2h volume",
+    "Central heating gas current month native",
+    "Domestic hot water gas current month native",
+    "Central heating gas current 2h average flow",
+    "Domestic hot water gas current 2h average flow",
+    "Electricity consumption for heating last month",
+    "Electricity consumption for water last month",
+})
+
+
+def _metering_device_info(parent):
+    """Group Ariston GALEVO energy entities into one linked virtual device.
+
+    The existing entity unique_id and entity_id are intentionally untouched:
+    only the device registry association changes. Never modify parent in-place.
+    """
+    identifiers = parent.get("identifiers", set())
+    primary = next(
+        (identifier for identifier in identifiers
+         if isinstance(identifier, tuple) and len(identifier) == 2
+         and identifier[0] == DOMAIN and identifier[1]),
+        None,
+    )
+    if primary is None:
+        return parent
+    return {
+        "identifiers": {(DOMAIN, f"{primary[1]}:energy-metering")},
+        # HA 2026.10 rejects the deprecated via_device DeviceInfo field.
+        # Keep device identifiers stable; existing registry links are retained.
+        "manufacturer": parent.get("manufacturer", "Ariston"),
+        "model": "GALEVO · учёт энергии",
+        "name": "Энергопотребление",
+        "sw_version": parent.get("sw_version"),
+    }
 
 
 @dataclass(kw_only=True, frozen=True)
@@ -48,21 +128,38 @@ async def async_setup_entry(
         coordinator: DeviceDataUpdateCoordinator = hass.data[DOMAIN][entry.unique_id][
             description.coordinator
         ]
-        if (
-            coordinator
-            and coordinator.device
-            and coordinator.device.are_device_features_available(
-                description.device_features,
-                description.system_types,
-                description.whe_types,
-            )
+        if not coordinator or not coordinator.device:
+            continue
+
+        # GALEVO exposes its split metering reports separately from the
+        # older SDK capability list. Do not drop an existing Energy entity
+        # merely because the SDK flags for that specific consumption channel
+        # were not advertised. The entity itself waits for verified source data.
+        is_galevo_energy = (
+            coordinator.device.system_type == SystemType.GALEVO
+            and description.key in ENERGY_SOURCES
+        )
+        if not is_galevo_energy and not coordinator.device.are_device_features_available(
+            description.device_features,
+            description.system_types,
+            description.whe_types,
         ):
-            ariston_sensors.append(
-                AristonSensor(
-                    coordinator,
-                    description,
-                )
+            continue
+
+        sensor_type = (
+            AristonCalendarEnergySensor if is_galevo_energy else AristonSensor
+        )
+        # Put user-facing consumption in Sensors. Keep only technical
+        # diagnostics in Diagnostics. Never change the stable unique_id.
+        shown_description = (
+            replace(description, entity_category=None)
+            if is_galevo_energy or (
+                coordinator.device.system_type == SystemType.GALEVO
+                and description.key in METERING_READING_KEYS
             )
+            else description
+        )
+        ariston_sensors.append(sensor_type(coordinator, shown_description))
 
     heating_managers = hass.data[DOMAIN][entry.unique_id].get(
         HEATING_SCENARIO_MANAGERS, {}
@@ -111,8 +208,6 @@ async def async_setup_entry(
             ]
         )
 
-    async_add_entities(ariston_sensors)
-
     # Independent R2 gas counters for Home Assistant Energy Dashboard.
     # They intentionally do not use AristonSensorEntityDescription/AristonEntity.
     energy_coordinator: DeviceDataUpdateCoordinator = hass.data[DOMAIN][entry.unique_id][
@@ -124,32 +219,43 @@ async def async_setup_entry(
         # by this platform. That is the exact HA device currently named "Печка".
         real_device_info = None
         for _normal_sensor in ariston_sensors:
+            # Do not derive the parent from a metering entity: its device_info
+            # now points to the linked meter, not to the real GALEVO device.
+            if (getattr(_normal_sensor.entity_description, "coordinator", None)
+                    == ENERGY_COORDINATOR):
+                continue
             _info = getattr(_normal_sensor, "device_info", None)
             if _info:
                 real_device_info = _info
                 break
 
         if real_device_info is not None:
-            async_add_entities(
-                [
+            # Add both R2 counters to the *same* HA platform batch. Previously
+            # they were scheduled as a second background add task, which could
+            # race the normal sensor registry setup on a slow Recorder restore.
+            meter_device = _metering_device_info(real_device_info)
+            ariston_sensors.extend([
                 AristonGasEnergySensor(
-                    energy_coordinator,
-                    entry,
-                    "heating",
-                    "Газ отопление — Energy Live",
-                    "Heating",
-                    real_device_info,
+                    energy_coordinator, entry, "heating",
+                    "Газ отопление — Energy Live", "Heating", meter_device,
                 ),
                 AristonGasEnergySensor(
-                    energy_coordinator,
-                    entry,
-                    "dhw",
-                    "Газ ГВС — Energy Live",
-                    "Dhw",
-                    real_device_info,
+                    energy_coordinator, entry, "dhw",
+                    "Газ ГВС — Energy Live", "Dhw", meter_device,
                 ),
-            ]
-        )
+            ])
+
+    # One registration batch for all Ariston entities. No new IDs.
+    _LOGGER.info(
+        "Ariston sensors prepared: %d total, %d GALEVO energy meters",
+        len(ariston_sensors),
+        sum(isinstance(entity, AristonCalendarEnergySensor)
+            or isinstance(entity, AristonGasEnergySensor)
+            for entity in ariston_sensors),
+    )
+    from .accounting_runtime import attach
+    await attach(hass, entry, energy_coordinator, ariston_sensors)
+    async_add_entities(ariston_sensors)
 
 
 
@@ -219,8 +325,50 @@ class AristonHeatingZoneSensor(AristonEntity, SensorEntity):
         return None
 
 
-class AristonGasEnergySensor(CoordinatorEntity, SensorEntity):
-    """Native R2 cumulative gas counter for Home Assistant Energy."""
+class DatedAccountingMixin:
+    """Use reconciled values only after the Recorder transaction commits."""
+
+    @property
+    def native_value(self):
+        runtime = getattr(self, "_dated_accounting", None)
+        value = runtime.value(self._dated_key) if runtime else None
+        return value if value is not None else super().native_value
+
+    @property
+    def available(self):
+        runtime = getattr(self, "_dated_accounting", None)
+        if runtime and runtime.value(self._dated_key) is not None:
+            return True
+        return super().available
+
+    @property
+    def state_class(self):
+        runtime = getattr(self, "_dated_accounting", None)
+        if runtime and runtime.value(self._dated_key) is not None:
+            return SensorStateClass.TOTAL
+        return super().state_class
+
+    @property
+    def last_reset(self):
+        runtime = getattr(self, "_dated_accounting", None)
+        if runtime and runtime.value(self._dated_key) is not None:
+            return dt_util.parse_datetime("1970-01-01T00:00:00+00:00")
+        return getattr(super(), "last_reset", None)
+
+    @property
+    def extra_state_attributes(self):
+        attrs = dict(super().extra_state_attributes or {})
+        runtime = getattr(self, "_dated_accounting", None)
+        if runtime and runtime.value(self._dated_key) is not None:
+            for name in ("source_year", "source_total_kwh", "source_sync_status", "source_through_date",
+                         "r2_source_gap_m3", "r2_pending_increase_m3", "last_r2_accepted_at"):
+                attrs.pop(name, None)
+            attrs.update(runtime.attributes(self._dated_key))
+        return attrs
+
+
+class AristonGasEnergySensor(DatedAccountingMixin, CoordinatorEntity, SensorEntity, RestoreEntity):
+    """R2 gas m³ accumulator that survives refreshes and HA restarts."""
 
     _attr_device_class = SensorDeviceClass.GAS
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
@@ -246,48 +394,183 @@ class AristonGasEnergySensor(CoordinatorEntity, SensorEntity):
         self._series = series
         self._last_valid_value: float | None = None
         self._last_valid_year: int | None = None
+        self._last_accepted_at: str | None = None
+        # A new R2 increase must survive two distinct HTTP snapshots before
+        # entering HA's irreversible total_increasing/high-water history.
+        self._pending_source_value: float | None = None
+        self._pending_source_time = None
+        self._store = None
         base_id = entry.unique_id or getattr(coordinator.device, "gw", "ariston")
         self._config_entry_unique_id = entry.unique_id
-        # Keep the existing unique_id so HA preserves the same entity/history.
+        # The existing unique ID, entity ID, and Recorder history MUST stay.
         self._attr_unique_id = f"{base_id}_r2_gas_energy_live_v3_{suffix}"
+
+    async def async_added_to_hass(self):
+        """Restore the last safe gas reading BEFORE publishing fresh R2 data."""
+        key = hashlib.sha256(self.unique_id.encode()).hexdigest()
+        self._store = Store(self.hass, 1, f"{DOMAIN}.gas_energy_live.{key}")
+        saved = await self._store.async_load()
+        now_year = dt_util.now().year
+        saved_year = saved.get("year") if isinstance(saved, dict) else None
+        saved_value = (
+            nonnegative(saved.get("value")) if isinstance(saved, dict) else None
+        )
+
+        # First upgrade: migrate the last HA state from RestoreEntity.
+        # Later reloads use the dedicated persistent high-water mark as well.
+        old_state = await self.async_get_last_state()
+        old_value = nonnegative(old_state.state) if old_state else None
+        old_year = None
+        if old_state is not None:
+            old_updated = getattr(old_state, "last_updated", None)
+            if old_updated is not None:
+                old_year = dt_util.as_local(old_updated).year
+            else:
+                old_year = now_year
+
+        # A missing Store or an unavailable last HA state is not proof that
+        # a previously valid gas meter had no baseline. Recover its most
+        # recent numeric Recorder state without modifying SQL/statistics.
+        if saved_value is None and old_value is None:
+            recorder_value = await _async_last_recorder_meter_state(
+                self.hass, self.entity_id
+            )
+            if recorder_value is not None:
+                old_value = recorder_value
+                old_year = now_year
+
+        candidates = []
+        if saved_year == now_year and saved_value is not None:
+            candidates.append(saved_value)
+        if old_year == now_year and old_value is not None:
+            candidates.append(old_value)
+        if candidates:
+            self._last_valid_value = max(candidates)
+            self._last_valid_year = now_year
+        if (isinstance(saved, dict) and saved_year == now_year
+                and saved_value == self._last_valid_value):
+            self._last_accepted_at = saved.get("accepted_at")
+
+        # Preserve the restored baseline in Store even if the next R2 poll
+        # returns an older/revised cloud snapshot.
+        if self._last_valid_value is not None:
+            await self._store.async_save(self._stored_state())
+        await super().async_added_to_hass()
+
+    def _stored_state(self):
+        return {
+            "year": self._last_valid_year,
+            "value": self._last_valid_value,
+            "accepted_at": self._last_accepted_at,
+        }
 
     @property
     def native_value(self):
+        runtime = getattr(self, "_dated_accounting", None)
+        if runtime and runtime.value(self._dated_key) is not None:
+            return runtime.value(self._dated_key)
         value = get_native_gas_energy_live_total(
             self.coordinator.device, self._series
         )
-        current_year = datetime.now().year
+        current_year = dt_util.now().year
 
-        # No usable R2 snapshot: hold the previous valid counter value.
+        # Missing/invalid/temporary lower R2 totals are NOT meter resets.
+        value = nonnegative(value)
         if value is None:
             return self._last_valid_value
-
-        try:
-            value = float(value)
-        except (TypeError, ValueError):
-            return self._last_valid_value
-
-        # A fresh entity may legitimately start at zero, but once a positive
-        # yearly total has been seen, a transient zero/decrease is not published.
         if self._last_valid_year == current_year and self._last_valid_value is not None:
-            if value < self._last_valid_value:
-                _LOGGER.warning(
-                    "Ariston R2 gas Energy ignored decreasing value for %s: %.3f -> %.3f m3",
-                    self._series,
-                    self._last_valid_value,
-                    value,
+            if value <= self._last_valid_value:
+                # A cloud correction or unchanged reading invalidates any
+                # unconfirmed high-water candidate. Never publish a decrease.
+                self._pending_source_value = None
+                self._pending_source_time = None
+                if value < self._last_valid_value:
+                    _LOGGER.debug(
+                        "Ariston R2 gas %s holding verified %.3f over %.3f m3",
+                        self._series, self._last_valid_value, value,
+                    )
+                    return self._last_valid_value
+            else:
+                snapshot_time = getattr(
+                    self.coordinator.device, "r2_gas_snapshot_time", None
                 )
-                return self._last_valid_value
+                if snapshot_time is not None:
+                    if (
+                        self._pending_source_value != value
+                        or self._pending_source_time == snapshot_time
+                    ):
+                        # Calling native_value twice for one snapshot is not
+                        # two confirmations; wait for the next HTTP response.
+                        self._pending_source_value = value
+                        self._pending_source_time = snapshot_time
+                        return self._last_valid_value
+                    self._pending_source_value = None
+                    self._pending_source_time = None
 
-        # On a real calendar-year change a reset is allowed.
-        self._last_valid_year = current_year
-        self._last_valid_value = value
+        if self._last_valid_year != current_year or value != self._last_valid_value:
+            # Calendar-year rollover is allowed; within a year never publish
+            # a lower value that HA would interpret as a meter reset.
+            self._last_valid_year = current_year
+            self._last_valid_value = value
+            self._last_accepted_at = dt_util.now().isoformat()
+            if self._store is not None:
+                self._store.async_delay_save(self._stored_state, 1)
         return value
+
+    @property
+    def available(self):
+        runtime = getattr(self, "_dated_accounting", None)
+        if runtime and runtime.value(self._dated_key) is not None:
+            return True
+        # A confirmed reading stays usable through temporary API/R2 failures.
+        # New entities still wait for the first actual R2 number.
+        return (
+            self._last_valid_value is not None
+            or nonnegative(
+                get_native_gas_energy_live_total(self.coordinator.device, self._series)
+            ) is not None
+        )
+
+    @property
+    def extra_state_attributes(self):
+        runtime = getattr(self, "_dated_accounting", None)
+        if runtime and runtime.value(self._dated_key) is not None:
+            return runtime.attributes(self._dated_key)
+        """Expose source/accepted discrepancy without changing the counter."""
+        source = nonnegative(get_native_gas_energy_live_total(
+            self.coordinator.device, self._series
+        ))
+        snapshot_time = getattr(self.coordinator.device, "r2_gas_snapshot_time", None)
+        return {
+            "last_r2_accepted_at": self._last_accepted_at,
+            "r2_snapshot_time": (
+                snapshot_time.isoformat() if snapshot_time is not None else None
+            ),
+            "r2_source_total_m3": source,
+            "r2_pending_increase_m3": self._pending_source_value,
+            "r2_source_gap_m3": (
+                round(self._last_valid_value - source, 3)
+                if source is not None and self._last_valid_value is not None
+                else None
+            ),
+        }
 
 
 
 class AristonSensor(AristonEntity, SensorEntity):
     """Base class for specific ariston sensors."""
+
+    @property
+    def device_info(self):
+        """Place only GALEVO energy readings under the linked meter device."""
+        parent = super().device_info
+        if (
+            self.device.system_type == SystemType.GALEVO
+            and getattr(self.entity_description, "coordinator", None)
+            == ENERGY_COORDINATOR
+        ):
+            return _metering_device_info(parent)
+        return parent
 
     def __init__(
         self,
@@ -300,7 +583,38 @@ class AristonSensor(AristonEntity, SensorEntity):
     @property
     def native_value(self):
         """Return value of sensor."""
+        from .metering_interval import reading, SUPPORTED
+        if self.entity_description.key in SUPPORTED and self.device.system_type == SystemType.GALEVO:
+            result = reading(self.device, dt_util.now())
+            return result["values"].get(self.entity_description.key) if result else None
+        previous_keys = {
+            "Electricity consumption for heating last month": "Central heating electricity consumption",
+            "Electricity consumption for water last month": "Domestic hot water electricity consumption",
+        }
+        key = previous_keys.get(self.entity_description.key)
+        if key and self.device.system_type == SystemType.GALEVO:
+            from .energy_counter import electricity_days
+            at = getattr(self.device, "energy_sequences_date", None)
+            if at and at == getattr(self.device, "r2_kwh_snapshot_date", None):
+                days = electricity_days(getattr(self.device, "energy_sequences_snapshot", None),
+                                        getattr(self.device, "r2_kwh_raw", None), at, key)
+                if days is not None:
+                    first = at.replace(day=1).isoformat()
+                    self._verified_previous_month = round(sum(v for d, v in days.items() if d < first), 6)
+            return getattr(self, "_verified_previous_month", None)
         return self.entity_description.get_native_value(self)
+
+    @property
+    def extra_state_attributes(self):
+        attrs = dict(super().extra_state_attributes or {})
+        from .metering_interval import reading, SUPPORTED
+        if self.entity_description.key in SUPPORTED and self.device.system_type == SystemType.GALEVO:
+            result = reading(self.device, dt_util.now())
+            attrs.update(result["attributes"] if result else {
+                "source_status": "waiting_for_matching_r2_reports",
+                "measurement_period": "last_completed_two_hour_interval",
+            })
+        return attrs
 
     @property
     def native_unit_of_measurement(self):
@@ -328,3 +642,244 @@ class AristonSensor(AristonEntity, SensorEntity):
             return self.entity_description.get_last_reset(self)
 
         return None
+
+
+class AristonCalendarEnergySensor(DatedAccountingMixin, AristonSensor, RestoreEntity):
+    """Existing GALEVO kWh entity backed by a persistent calendar counter.
+
+    Preserve the descriptor, unique_id, unit and state_class. In particular,
+    a first installation of this fix must not book the year's total as new
+    consumption. Recorder history is not rewritten by this migration.
+    """
+
+    def __init__(self, coordinator, description):
+        super().__init__(coordinator, description)
+        self._counter = None
+        self._store = None
+        self._source_available = False
+        self._restored_floor = 0.0
+        # A Recorder/Store baseline is already a confirmed reading.
+        # Do not hide it while API v2 and R2 reports are desynchronized.
+        self._has_restored_baseline = False
+
+    async def async_added_to_hass(self):
+        key = hashlib.sha256(self.unique_id.encode()).hexdigest()
+        self._store = Store(self.hass, 1, f"{DOMAIN}.energy_counter.{key}")
+        saved = await self._store.async_load()
+        # A placeholder from a failed initial read must not suppress Recorder
+        # recovery, nor overwrite the recovered baseline with its stored zero.
+        trusted_saved = isinstance(saved, dict) and (
+            saved.get("baseline_confirmed") is True
+            or nonnegative(saved.get("source")) is not None
+            or (nonnegative(saved.get("value")) or 0.0) > 0
+        )
+        if not trusted_saved:
+            saved = None
+        old_state = await self.async_get_last_state()
+        if saved is None and (old_state is None or nonnegative(old_state.state) is None):
+            # The old AristonSensor did not implement RestoreEntity. Read its
+            # last numeric Recorder state during this one-time migration.
+            old_state = await self._async_migration_state()
+        initial = nonnegative(old_state.state) if old_state else None
+        if initial is not None:
+            initial = EnergyConverter.convert(
+                initial, old_state.attributes.get("unit_of_measurement", "kWh"), "kWh"
+            )
+        self._restored_floor = initial or 0.0
+        saved_meter_value = (
+            nonnegative(saved.get("value")) if isinstance(saved, dict) else None
+        )
+        # An unverified brand-new meter writes a placeholder zero to Store.
+        # That placeholder is NOT a confirmed baseline on the next reboot.
+        # Preserve a nonzero historical baseline or a value backed by a
+        # confirmed source; also trust explicit numeric Recorder state 0.0.
+        self._has_restored_baseline = (
+            initial is not None
+            or (
+                saved_meter_value is not None
+                and (
+                    saved.get("baseline_confirmed") is True
+                    or saved_meter_value > 0
+                    or nonnegative(saved.get("source")) is not None
+                )
+            )
+        )
+        self._counter = EnergyCounter(saved, initial or 0.0)
+        self._counter.baseline_confirmed = self._has_restored_baseline
+        if saved is None and old_state:
+            # Keep the old reset marker constant through migration. Changing
+            # it would tell Recorder to count the whole restored value again.
+            self._counter.last_reset = old_state.attributes.get("last_reset")
+        self._update_counter()
+        # Persist the baseline before this entity starts publishing states.
+        await self._store.async_save(self._counter.as_dict())
+        await super().async_added_to_hass()
+
+    async def _async_migration_state(self):
+        if "recorder" not in self.hass.config.components:
+            return None
+        from homeassistant.components.recorder import get_instance
+        from homeassistant.components.recorder.history import get_significant_states
+        from homeassistant.components.recorder.statistics import (
+            get_last_short_term_statistics, get_last_statistics,
+        )
+        from homeassistant.core import State
+
+        recorder = get_instance(self.hass)
+        states = await recorder.async_add_executor_job(partial(
+            get_significant_states, self.hass, dt_util.utcnow() - timedelta(days=1),
+            entity_ids=[self.entity_id], significant_changes_only=False,
+        ))
+        for state in reversed(states.get(self.entity_id, [])):
+            if nonnegative(state.state) is not None:
+                return state
+        # An entity may have been unavailable longer than the retained state
+        # history. Its last statistics state still anchors the existing sum.
+        for getter in (get_last_short_term_statistics, get_last_statistics):
+            result = await recorder.async_add_executor_job(
+                getter, self.hass, 1, self.entity_id, True, {"state", "last_reset"}
+            )
+            for row in result.get(self.entity_id, []):
+                if nonnegative(row.get("state")) is not None:
+                    reset = row.get("last_reset")
+                    attrs = {"unit_of_measurement": self.unit_of_measurement}
+                    if reset is not None:
+                        attrs["last_reset"] = dt_util.utc_from_timestamp(reset).isoformat()
+                    return State(self.entity_id, str(row["state"]), attrs)
+        return None
+
+    def _update_counter(self):
+        runtime = getattr(self, "_dated_accounting", None)
+        if runtime and runtime.value(self._dated_key) is not None:
+            return
+        if self._counter is None:
+            return
+        payload = getattr(self.device, "r2_kwh_data", None)
+        snapshot_date = getattr(self.device, "r2_kwh_snapshot_date", None)
+        series, tabs = ENERGY_SOURCES[self.entity_description.key]
+        before = self._counter.as_dict()
+        if self.entity_description.key in DAILY_KEYS:
+            api_date = getattr(self.device, "energy_sequences_date", None)
+            api_time = getattr(self.device, "energy_sequences_time", None)
+            r2_time = getattr(self.device, "r2_kwh_snapshot_time", None)
+
+            # R2 and API v2 are polled independently. At a two-hour boundary
+            # R2 may already be in the new bucket while API v2 is still in the
+            # previous one. This means "not verified yet", NOT "unavailable".
+            aligned = (
+                api_date == snapshot_date
+                and api_time is not None
+                and r2_time is not None
+                and api_time.hour // 2 == r2_time.hour // 2
+            )
+            if aligned:
+                days = electricity_periods(
+                    getattr(self.device, "energy_sequences_snapshot", None),
+                    getattr(self.device, "r2_kwh_raw", None),
+                    api_time, self.entity_description.key,
+                )
+                if days and self._counter.update_days(days):
+                    # These timestamps belong to the accepted reading, not
+                    # the latest unverified response. Persist both with it.
+                    self._counter.mark_verified_period(api_time, snapshot_date)
+
+            # Keep the previously verified reading visible while waiting for
+            # both sources to report the same complete two-hour period.
+            self._source_available = (
+                bool(self._counter.daily) and self._counter.source is not None
+            )
+        else:
+            source = calendar_total(payload, series, tabs, snapshot_date)
+            if source is not None:
+                previous = calendar_total(
+                    payload, series, tabs, snapshot_date, previous_year=True
+                )
+                self._counter.update(source, snapshot_date.year, previous)
+            # A temporary missing/stale R2 report must not hide a counter
+            # whose previously confirmed source is already persisted.
+            self._source_available = self._counter.source is not None
+        if self._counter.as_dict() != before and self._store is not None:
+            self._store.async_delay_save(self._counter.as_dict, 1)
+
+    def _handle_coordinator_update(self):
+        self._update_counter()
+        super()._handle_coordinator_update()
+
+    @property
+    def available(self):
+        runtime = getattr(self, "_dated_accounting", None)
+        if runtime and runtime.value(self._dated_key) is not None:
+            return True
+        # A transient coordinator failure or an R2/API-v2 polling mismatch
+        # must not turn an already verified, persisted energy value unavailable.
+        # An unverified first reading stays unavailable until validated.
+        return self._source_available or self._has_restored_baseline
+
+    @property
+    def native_value(self):
+        runtime = getattr(self, "_dated_accounting", None)
+        if runtime and runtime.value(self._dated_key) is not None:
+            return runtime.value(self._dated_key)
+        if self._counter is None:
+            return None
+        if self._counter.source is None and not self._has_restored_baseline:
+            return None
+        # Store and Recorder flush independently. After an abrupt shutdown,
+        # never publish less than the last visible value while the persisted
+        # source/output pair catches up. Do not raise the stored output alone:
+        # that would replay the difference on the next source update.
+        return max(self._counter.value, self._restored_floor)
+
+    @property
+    def last_reset(self):
+        runtime = getattr(self, "_dated_accounting", None)
+        if runtime and runtime.value(self._dated_key) is not None:
+            return dt_util.parse_datetime("1970-01-01T00:00:00+00:00")
+        if self._counter and self._counter.last_reset:
+            return dt_util.parse_datetime(self._counter.last_reset)
+        return None
+
+    @property
+    def extra_state_attributes(self):
+        runtime = getattr(self, "_dated_accounting", None)
+        if runtime and runtime.value(self._dated_key) is not None:
+            return runtime.attributes(self._dated_key)
+        attrs = dict(super().extra_state_attributes or {})
+        daily = self.entity_description.key in DAILY_KEYS
+        attrs["energy_counter_source"] = (
+            "API v2 two-hour intervals verified against R2" if daily
+            else "R2 asKwh calendar reports"
+        )
+        if daily and self._counter:
+            if self._counter.daily:
+                attrs["source_through_date"] = max(self._counter.daily)
+            attrs["source_interval_end"] = self._counter.source_interval_end
+
+            # Diagnostics: show both independently refreshed source times
+            # without replacing the stored time of the last accepted reading.
+            api_time = getattr(self.device, "energy_sequences_time", None)
+            r2_time = getattr(self.device, "r2_kwh_snapshot_time", None)
+            attrs["api_v2_snapshot_time"] = (
+                api_time.isoformat() if api_time else None
+            )
+            attrs["r2_snapshot_time"] = (
+                r2_time.isoformat() if r2_time else None
+            )
+            aligned = bool(
+                api_time and r2_time
+                and api_time.date() == r2_time.date()
+                and api_time.hour // 2 == r2_time.hour // 2
+            )
+            attrs["source_sync_status"] = (
+                "aligned" if aligned else "waiting_for_matching_api_v2_and_r2"
+            )
+        if self._counter:
+            attrs["source_year"] = self._counter.year
+            attrs["source_total_kwh"] = self._counter.source
+        snapshot_date = getattr(self.device, "r2_kwh_snapshot_date", None)
+        attrs["source_snapshot_date"] = (
+            self._counter.source_snapshot_date
+            if daily and self._counter
+            else snapshot_date.isoformat() if snapshot_date else None
+        )
+        return attrs

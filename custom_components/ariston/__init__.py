@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import asyncio
+from copy import deepcopy
 
 from datetime import timedelta
 
@@ -33,6 +35,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util.unit_system import METRIC_SYSTEM
+from homeassistant.util import dt as dt_util
 
 from .const import (
     API_URL_SETTING,
@@ -172,7 +175,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 device.dhw_time_program = new_program
 
                 if changed and notify:
-                    coordinator.async_set_updated_data(coordinator.data)
+                    coordinator.async_update_listeners()
 
             except Exception as err:
                 _LOGGER.warning(
@@ -219,7 +222,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     programs[zone] = new_program
 
                 if changed and notify:
-                    coordinator.async_set_updated_data(coordinator.data)
+                    coordinator.async_update_listeners()
 
             except Exception as err:
                 _LOGGER.warning(
@@ -286,7 +289,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN][entry.unique_id][BUS_ERRORS_COORDINATOR] = (
             bus_errors_coordinator
         )
-        await bus_errors_coordinator.async_config_entry_first_refresh()
+        try:
+            await bus_errors_coordinator.async_config_entry_first_refresh()
+        except ConfigEntryNotReady:
+            _LOGGER.warning(
+                "Ariston bus-error list unavailable; continuing setup. "
+                "Diagnostics will retry on the normal polling interval."
+            )
 
         if device.has_metering:
             # Keep API v2 as the primary/normal energy source.
@@ -438,9 +447,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
                 web_logged_in = True
 
+            r2_lock = asyncio.Lock()
+
             async def async_update_physical_gas():
+                async with r2_lock:
+                    await async_update_physical_gas_locked()
+
+            async def async_update_physical_gas_locked():
                 """Fetch Ariston's native asPhysicalUnit metering values."""
                 nonlocal web_logged_in
+
+                snapshot_started = dt_util.now()
 
                 if not web_logged_in:
                     await async_web_login()
@@ -502,12 +519,51 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 if not isinstance(physical, dict):
                     raise RuntimeError("R2 response has no data.asPhysicalUnit")
 
+                snapshot_finished = dt_util.now()
+                # Prevent a request that straddled a local calendar/two-hour
+                # boundary from publishing yesterday's report as today's gas.
+                # Keep the last confirmed meter state until a fresh R2 read.
+                if (
+                    snapshot_started.date() != snapshot_finished.date()
+                    or snapshot_started.hour // 2 != snapshot_finished.hour // 2
+                ):
+                    _LOGGER.debug(
+                        "Ariston R2 gas ignored cross-boundary snapshot: %s -> %s",
+                        snapshot_started.isoformat(),
+                        snapshot_finished.isoformat(),
+                    )
+                    return
+
                 device.gas_physical_unit_data = physical
+                device.r2_gas_snapshot_date = snapshot_finished.date()
+                device.r2_gas_snapshot_time = snapshot_finished
+                # Keep calendar reports to verify and date the API-v2 arrays.
+                # Unverified rolling arrays must never be added to a counter.
+                kwh = result.get("data", {}).get("asKwh")
+                if (
+                    isinstance(kwh, dict)
+                    and snapshot_started.date() == snapshot_finished.date()
+                    and snapshot_started.hour // 2 == snapshot_finished.hour // 2
+                ):
+                    device.r2_kwh_snapshot_time = snapshot_finished
+                    device.r2_kwh_raw = result.get("data", {}).get("asKwhRaw")
+                    device.r2_kwh_data = kwh
+                    device.r2_kwh_snapshot_date = snapshot_finished.date()
+                # A request crossing local midnight is not a dated snapshot.
+                # Keep the preceding snapshot with its original date instead.
                 _LOGGER.info("Ariston native physical gas metering updated")
 
             async def async_update_energy_with_web_metering():
                 """Refresh normal API energy plus optional native R2 m³ data."""
+                api_started = dt_util.now()
                 result = await original_async_update_energy()
+                api_finished = dt_util.now()
+                if (api_started.date() == api_finished.date()
+                        and api_started.hour // 2 == api_finished.hour // 2):
+                    device.energy_sequences_snapshot = deepcopy(device.consumptions_sequences)
+                    device.energy_sequences_date = api_finished.date()
+                    device.energy_sequences_time = api_finished
+
 
                 try:
                     await async_update_physical_gas()
@@ -524,6 +580,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             energy_interval_minutes = entry.options.get(
                 ENERGY_SCAN_INTERVAL, DEFAULT_ENERGY_SCAN_INTERVAL_MINUTES
             )
+            if device.system_type == SystemType.GALEVO:
+                # GALEVO p=1 carries finished two-hour periods, but API v2
+                # can publish a new finished period before the configured
+                # hourly energy poll. Read every <=10 minutes to detect it
+                # promptly; R2 still refreshes independently every 2 min.
+                # Do not accelerate normal/non-GALEVO energy requests.
+                energy_interval_minutes = min(energy_interval_minutes, 10)
             energy_coordinator = DeviceDataUpdateCoordinator(
                 hass,
                 device,
@@ -532,7 +595,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 async_update_energy_with_web_metering,
             )
             hass.data[DOMAIN][entry.unique_id][ENERGY_COORDINATOR] = energy_coordinator
-            await energy_coordinator.async_config_entry_first_refresh()
+            try:
+                await energy_coordinator.async_config_entry_first_refresh()
+            except ConfigEntryNotReady:
+                _LOGGER.warning(
+                    "Ariston energy reports unavailable at startup; "
+                    "continuing with restored meters and scheduled retries."
+                )
 
             # Native R2 gas metering is lightweight and useful for Energy.
             # Refresh it independently every 2 minutes without increasing the
@@ -540,8 +609,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             async def async_r2_gas_metering_timer(_now):
                 try:
                     await async_update_physical_gas()
-                    # Notify Energy sensor listeners immediately with the fresh R2 data.
-                    energy_coordinator.async_set_updated_data(energy_coordinator.data)
+                    # R2 is not an API-v2 success. Notify listeners without
+                    # resetting its ten-minute timer or clearing its error.
+                    energy_coordinator.async_update_listeners()
                 except Exception as err:
                     _LOGGER.warning(
                         "Ariston native R2 gas metering timer unavailable: %r",
@@ -557,6 +627,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
 
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+        # Remove ONLY our obsolete custom JSON-export button. Home Assistant's
+        # built-in /diagnostics API now provides a real browser download.
+        # Never delete devices, other buttons, user-disabled entities, or IDs
+        # used by Energy / automation.
+        registry = er.async_get(hass)
+        export_uid = f"{device.gateway}-Ariston export R2 diagnostics"
+        export_entity_id = registry.async_get_entity_id("button", DOMAIN, export_uid)
+        if export_entity_id:
+            old_button = registry.async_get(export_entity_id)
+            if old_button is not None and old_button.config_entry_id == entry.entry_id:
+                registry.async_remove(export_entity_id)
+                _LOGGER.info("Ariston obsolete R2 JSON button removed from registry")
 
         entry.async_on_unload(entry.add_update_listener(update_listener))
 
@@ -586,7 +669,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 async_set_item_by_id_service,
                 schema=SET_ITEM_BY_ID_SCHEMA,
             )
-    except ConfigEntryAuthFailed:
+    except (ConfigEntryAuthFailed, ConfigEntryNotReady):
         raise
     except Exception as error:
         _LOGGER.exception("")
@@ -609,26 +692,3 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     return unload_ok
 
-
-async def async_remove_config_entry_device(
-    hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    device_entry: dr.DeviceEntry,
-) -> bool:
-    """Allow manual removal of stale empty Ariston devices."""
-    entity_registry = er.async_get(hass)
-
-    # Never allow deletion while any entity is still attached to this device.
-    if er.async_entries_for_device(
-        entity_registry,
-        device_entry.id,
-        include_disabled_entities=True,
-    ):
-        return False
-
-    # The current device registry is single-config-entry. Only handle devices
-    # actually owned by this Ariston config entry.
-    if device_entry.config_entry_id != config_entry.entry_id:
-        return False
-
-    return True

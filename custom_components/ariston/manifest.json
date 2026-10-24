@@ -1,6 +1,7 @@
 {
   "domain": "ariston",
   "name": "Ariston",
+  "after_dependencies": ["recorder"],
   "codeowners": [
     "@sasamix"
   ],
