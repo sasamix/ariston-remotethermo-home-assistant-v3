@@ -30,8 +30,8 @@ from homeassistant.const import (
     CONF_USERNAME,
     Platform,
 )
-from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
-from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady, HomeAssistantError
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util.unit_system import METRIC_SYSTEM
@@ -81,30 +81,6 @@ SET_ITEM_BY_ID_SCHEMA = vol.Schema(
         vol.Required(ATTR_VALUE): vol.Coerce(float),
     }
 )
-
-SERVICE_REPAIR_HISTORY = "repair_history"
-REPAIR_HISTORY_SCHEMA = vol.Schema(
-    {
-        vol.Required("start_date"): cv.date,
-        vol.Optional("dry_run", default=True): cv.boolean,
-    }
-)
-
-
-async def async_repair_history_service(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
-    """Run the one-off statistics repair for every dated-accounting gateway."""
-    runtimes = hass.data.get("ariston_accounting_runtimes", {})
-    if not runtimes:
-        raise HomeAssistantError("Ariston dated accounting is not active")
-    results = {}
-    for gateway, runtime in list(runtimes.items()):
-        try:
-            results[gateway] = await runtime.repair_history(
-                call.data["start_date"].isoformat(), call.data["dry_run"]
-            )
-        except Exception as err:
-            raise HomeAssistantError(f"Ariston history repair failed: {err}") from err
-    return results
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -693,19 +669,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 async_set_item_by_id_service,
                 schema=SET_ITEM_BY_ID_SCHEMA,
             )
-
-            if not hass.services.has_service(DOMAIN, SERVICE_REPAIR_HISTORY):
-
-                async def async_repair_history(call: ServiceCall) -> ServiceResponse:
-                    return await async_repair_history_service(hass, call)
-
-                hass.services.async_register(
-                    DOMAIN,
-                    SERVICE_REPAIR_HISTORY,
-                    async_repair_history,
-                    schema=REPAIR_HISTORY_SCHEMA,
-                    supports_response=SupportsResponse.OPTIONAL,
-                )
     except (ConfigEntryAuthFailed, ConfigEntryNotReady):
         raise
     except Exception as error:
