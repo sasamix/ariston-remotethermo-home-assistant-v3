@@ -126,3 +126,46 @@ class DatabaseTests(unittest.TestCase):
                 self.assertEqual(row.state,12345)
                 # No speculative rows are inserted after the confirmed boundary.
                 self.assertEqual(session.scalar(select(func.count()).select_from(model).where(model.start_ts>through)),0)
+
+
+class CostBaselineTests(unittest.TestCase):
+    """Recorder compiles the next hour as last.sum + (state - last.state)."""
+
+    def setUp(self):
+        self.db = DatabaseTests('test_dry_run_does_not_write')
+        self.db.setUp()
+        self.addCleanup(self.db.tearDown)
+        through = datetime.fromisoformat(self.db.ledger['through']).timestamp()
+        self.end = int(min(namespace['time'].time(), through)) // 3600 * 3600
+
+    def compile_next(self, state_now):
+        with scope(self.db.sessions()) as s:
+            last = s.scalars(select(Hour).where(Hour.metadata_id == 9).order_by(Hour.start_ts.desc())).first()
+            return round(state_now - last.state, 6)
+
+    def test_newest_cost_row_takes_current_cost_entity_state(self):
+        self.db.task.cost_states = {'sensor.heat_cost': (1234.5, 0.0)}
+        self.db.task.execute(self.db.instance)
+        with scope(self.db.sessions()) as s:
+            newest = s.scalars(select(Hour).where(Hour.metadata_id == 9).order_by(Hour.start_ts.desc())).first()
+            self.assertEqual(int(newest.start_ts), self.end - 3600)
+            self.assertEqual((newest.state, newest.last_reset_ts), (1234.5, 0.0))
+            other = s.scalar(select(Hour).where(Hour.metadata_id == 10, Hour.start_ts == self.end - 3600))
+            self.assertIsNone(other.state)   # no current state supplied for the DHW cost entity
+        # The cost entity already includes the reconciled interval: the next
+        # compile books nothing extra while the entity does not change.
+        self.assertEqual(self.compile_next(1234.5), 0)
+        self.assertEqual(self.compile_next(1250.0), 15.5)
+        # Idempotent with the same entity state.
+        self.assertEqual(self.db.task.execute(self.db.instance)['rows'], 0)
+
+    def test_baseline_untouched_when_recorder_already_compiled_a_newer_hour(self):
+        with scope(self.db.sessions()) as s:
+            s.add(Hour(metadata_id=9, start_ts=self.end, sum=5555, state=777, last_reset_ts=0))
+        self.db.task.cost_states = {'sensor.heat_cost': (1234.5, 0.0)}
+        self.db.task.execute(self.db.instance)
+        with scope(self.db.sessions()) as s:
+            row = s.scalar(select(Hour).where(Hour.metadata_id == 9, Hour.start_ts == self.end - 3600))
+            self.assertNotEqual(row.state, 1234.5)
+            newer = s.scalar(select(Hour).where(Hour.metadata_id == 9, Hour.start_ts == self.end))
+            self.assertEqual((newer.sum, newer.state), (5555, 777))

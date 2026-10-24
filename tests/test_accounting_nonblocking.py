@@ -28,7 +28,7 @@ class NonblockingTests(unittest.IsolatedAsyncioTestCase):
         self.jobs=[];self.tasks=[];self.states=[]
         loop=asyncio.get_running_loop()
         class Task:
-            def __init__(task,*args):task.future=loop.create_future()
+            def __init__(task,*args,**kwargs):task.future=loop.create_future();task.kwargs=kwargs
         def create(coro,*args,**kwargs):
             task=asyncio.create_task(coro);self.tasks.append(task);return task
         async def executor(fn):return fn()
@@ -43,7 +43,7 @@ class NonblockingTests(unittest.IsolatedAsyncioTestCase):
         r=self.r=object.__new__(self.ns['AccountingRuntime'])
         r.hass=SimpleNamespace(loop=loop,data={},async_create_task=create,async_create_background_task=create,async_add_executor_job=executor,
             config=SimpleNamespace(time_zone='Asia/Almaty',path=lambda p:self.tmp.name+'/'+p),
-            states=SimpleNamespace(async_set=lambda *args:self.states.append(args)))
+            states=SimpleNamespace(async_set=lambda *args:self.states.append(args),get=lambda entity_id:None))
         r.entry=object();r.config={'start_date':self.ledger['start_date']}
         r.ledger=deepcopy(self.ledger);r.values={k:1000.0 for k in ledger_module.KEYS}
         r.entities={k:SimpleNamespace(entity_id='sensor.'+k,async_write_ha_state=lambda:None) for k in ledger_module.KEYS}

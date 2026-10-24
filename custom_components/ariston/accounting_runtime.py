@@ -48,9 +48,12 @@ def numeric(value):
 
 
 class AccountingTask(RecorderTask):
-    def __init__(self, runtime, ledger, mapping, costmap, tariffs, dry_run=False):
+    def __init__(self, runtime, ledger, mapping, costmap, tariffs, dry_run=False, cost_states=None):
         self.runtime, self.ledger, self.mapping = runtime, ledger, mapping
         self.costmap, self.tariffs, self.dry_run = costmap, tariffs, dry_run
+        # Current (state, last_reset_ts) of each gas cost entity, read on the
+        # event loop right before queueing; see the cost baseline below.
+        self.cost_states = cost_states or {}
         self.future = runtime.hass.loop.create_future()
 
     def run(self, instance):
@@ -78,6 +81,7 @@ class AccountingTask(RecorderTask):
         lines, resolutions = curves(self.ledger)
         through = datetime.fromisoformat(self.ledger['through']).timestamp()
         backups, changes, values = [], [], {}
+        cost_states = getattr(self, 'cost_states', None) or {}
         base = Path(self.runtime.hass.config.path('ariston_accounting'))
         with session_scope(session=instance.get_session()) as session:
             ids = list(self.mapping.values()) + list(self.costmap.values())
@@ -136,6 +140,19 @@ class AccountingTask(RecorderTask):
                             # TOTAL meters have a fixed reset marker; source corrections
                             # are revisions, never a new lifetime/yearly meter reset.
                             reset = 0.0 if meter else (row.last_reset_ts if row is not None else None)
+                            newest = session.scalar(select(func.max(model.start_ts)).where(
+                                model.metadata_id==target.id)) if (not meter and step==3600 and start==end-step) else None
+                            if (not meter and step == 3600 and start == end-step
+                                    and target.statistic_id in cost_states
+                                    and (newest is None or newest <= start)):
+                                # The newest compiled cost row is the baseline
+                                # for Recorder's next compile (sum + state delta).
+                                # Its SUM now already includes the reconciled
+                                # interval, and the cost entity already counted
+                                # that interval when the gas meter changed. Use
+                                # the entity's current state as the baseline, so
+                                # the same interval is not booked a second time.
+                                state, reset = cost_states[target.statistic_id]
                             if row is not None and row.sum is not None and abs(float(row.sum)-total)<1e-8 and row.state==state and row.last_reset_ts==reset:
                                 continue
                             backups.append({'table':model.__tablename__,'metadata_id':target.id,
@@ -302,7 +319,8 @@ class AccountingRuntime:
                     raise ValueError('Waiting for tariff transaction recovery')
                 path=Path(self.hass.config.path('tariff_cost_manager/history.json'))
                 tariffs=await self.hass.async_add_executor_job(lambda:json.loads(path.read_text()))
-                task=AccountingTask(self,ledger,mapping,costmap,tariffs)
+                task=AccountingTask(self,ledger,mapping,costmap,tariffs,
+                                    cost_states=self.cost_states(costmap.values()))
                 get_instance(self.hass).queue_task(task)
                 result=await asyncio.shield(task.future)
                 if self.closed:
@@ -320,6 +338,24 @@ class AccountingRuntime:
             if not self.closed:
                 _LOGGER.warning('Ariston statistics reconciliation pending: %s',exc)
                 self.statistics_status('statistics_pending',str(exc))
+
+    def cost_states(self,entity_ids):
+        """Current state and reset marker of each gas cost entity."""
+        result={}
+        for entity_id in entity_ids:
+            state=self.hass.states.get(entity_id)
+            if state is None:
+                continue
+            try:
+                value=float(state.state)
+            except (TypeError,ValueError):
+                continue
+            if not isfinite(value):
+                continue
+            last_reset=state.attributes.get('last_reset')
+            parsed=dt_util.parse_datetime(last_reset) if isinstance(last_reset,str) else None
+            result[entity_id]=(value, parsed.timestamp() if parsed else None)
+        return result
 
     def statistics_status(self,status,error=None):
         self.hass.states.async_set('sensor.ariston_accounting_status',status,{

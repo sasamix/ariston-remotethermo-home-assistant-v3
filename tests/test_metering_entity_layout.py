@@ -159,6 +159,18 @@ class LayoutTests(unittest.IsolatedAsyncioTestCase):
         for name in required:
             self.assertIn(f'"{name}"', SENSOR_SOURCE)
 
+    def test_monthly_gas_totals_reset_instead_of_going_negative(self):
+        import ast
+        source = (Path(__file__).parents[1] / "custom_components/ariston/const.py").read_text()
+        found = {}
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.Call) and ast.unparse(node.func) == "AristonSensorEntityDescription":
+                kw = {k.arg: k.value for k in node.keywords}
+                key = kw.get("key")
+                if isinstance(key, ast.Constant) and str(key.value).endswith("current month native"):
+                    found[key.value] = ast.unparse(kw["state_class"])
+        self.assertEqual(sorted(found.values()), ["SensorStateClass.TOTAL_INCREASING"]*2)
+
 
 if __name__ == "__main__":
     unittest.main()

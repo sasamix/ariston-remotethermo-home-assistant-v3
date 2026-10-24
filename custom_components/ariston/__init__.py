@@ -69,6 +69,7 @@ PLATFORMS: list[str] = [
 ]
 
 SERVICE_SET_ITEM_BY_ID = "set_item_by_id"
+TIME_PROGRAM_REFRESH = timedelta(minutes=10)
 ATTR_ITEM_ID = "item_id"
 ATTR_ZONE = "zone"
 ATTR_VALUE = "value"
@@ -230,11 +231,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     err,
                 )
 
+        # Weekly programs change only when someone edits them. HA re-reads a
+        # program right after writing it, so a slow refresh only has to catch
+        # edits made in the mobile app. Polling them every 30 seconds was the
+        # largest share of all cloud requests.
+        program_refresh = {"at": None}
+
         async def async_update_state_with_time_programs():
-            """Update Ariston state plus DHW and heating weekly programs."""
+            """Update Ariston state; weekly programs at most every 10 minutes."""
             result = await async_update_state_resilient()
-            await async_update_dhw_program()
-            await async_update_heating_programs()
+            now = dt_util.utcnow()
+            last = program_refresh["at"]
+            if last is None or now - last >= TIME_PROGRAM_REFRESH:
+                program_refresh["at"] = now
+                await async_update_dhw_program()
+                await async_update_heating_programs()
             return result
 
         scan_interval_seconds = entry.options.get(
@@ -260,21 +271,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if device.system_type == SystemType.GALEVO:
             await async_setup_dhw_scenario_manager(hass, entry, coordinator)
             await async_setup_heating_scenario_managers(hass, entry, coordinator)
-
-        # Refresh the lightweight DHW and heating schedules every 30 seconds
-        # without increasing the normal device-state polling rate.
-        if device.system_type == SystemType.GALEVO:
-            async def async_time_program_timer(_now):
-                await async_update_dhw_program(notify=True)
-                await async_update_heating_programs(notify=True)
-
-            entry.async_on_unload(
-                async_track_time_interval(
-                    hass,
-                    async_time_program_timer,
-                    timedelta(seconds=30),
-                )
-            )
 
         bus_errors_scan_interval_seconds = entry.options.get(
             BUS_ERRORS_SCAN_INTERVAL, DEFAULT_BUS_ERRORS_SCAN_INTERVAL_SECONDS
@@ -603,28 +599,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     "continuing with restored meters and scheduled retries."
                 )
 
-            # Native R2 gas metering is lightweight and useful for Energy.
-            # Refresh it independently every 2 minutes without increasing the
-            # normal API-v2 energy polling rate.
-            async def async_r2_gas_metering_timer(_now):
-                try:
-                    await async_update_physical_gas()
-                    # R2 is not an API-v2 success. Notify listeners without
-                    # resetting its ten-minute timer or clearing its error.
-                    energy_coordinator.async_update_listeners()
-                except Exception as err:
-                    _LOGGER.warning(
-                        "Ariston native R2 gas metering timer unavailable: %r",
-                        err,
-                    )
-
-            entry.async_on_unload(
-                async_track_time_interval(
-                    hass,
-                    async_r2_gas_metering_timer,
-                    timedelta(minutes=2),
-                )
-            )
+            # R2 reports change once per two-hour interval. They are read
+            # together with API v2 on every energy refresh (<=10 minutes for
+            # GALEVO), which also keeps both snapshots in the same interval.
 
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
