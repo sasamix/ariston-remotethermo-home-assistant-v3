@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import json
 import logging
 from math import isfinite
@@ -169,6 +169,125 @@ class AccountingTask(RecorderTask):
         return report
 
 
+class HistoryRepairTask(AccountingTask):
+    """One-off rewrite of statistics SUM rows before the accounting start.
+
+    The window [start_date, accounting start) is re-allocated from the dated
+    daily cloud reports (uniform within each day). Recorded meter STATE values
+    and reset markers in the window are kept. Every row from the accounting
+    start onward is shifted by the same SUM delta, so daily changes after the
+    window are unchanged and the next hourly compile continues seamlessly.
+    Runs on Recorder's queue in one transaction, with a JSON backup.
+    """
+
+    def __init__(self, runtime, window, origin, mapping, costmap, tariffs, dry_run=False):
+        super().__init__(runtime, window, mapping, costmap, tariffs, dry_run)
+        self.origin = int(origin)
+
+    def execute(self, instance):
+        window = self.ledger
+        start = int(datetime.fromisoformat(window['start_date']).replace(
+            tzinfo=ZoneInfo(window['timezone'])).timestamp())
+        origin = self.origin
+        if not start < origin or (origin-start) % 3600:
+            raise ValueError('Invalid repair window')
+        lines, resolutions = curves(window)
+        backups, changes, summary = [], [], {}
+        base = Path(self.runtime.hass.config.path('ariston_accounting'))
+        with session_scope(session=instance.get_session()) as session:
+            ids = list(self.mapping.values()) + list(self.costmap.values())
+            metadata = {m.statistic_id:m for m in session.execute(
+                select(StatisticsMeta).where(StatisticsMeta.statistic_id.in_(ids))).scalars()}
+            if set(metadata) != set(ids):
+                raise ValueError('Missing statistics metadata: '+str(set(ids)-set(metadata)))
+            first_short = session.scalar(select(func.min(StatisticsShortTerm.start_ts)))
+            targets = []
+            for key in KEYS:
+                entity = self.mapping[key]
+                meta = metadata[entity]
+                if not meta.has_sum or meta.unit_of_measurement not in {UNITS[key], 'm3' if UNITS[key]=='m³' else UNITS[key]}:
+                    raise ValueError('Unexpected unit or statistics type: '+entity)
+                targets.append((key, meta, lines[key]))
+                if key.startswith('gas_m3'):
+                    cm = metadata[self.costmap[entity]]
+                    if not cm.has_sum or cm.unit_of_measurement != 'KZT':
+                        raise ValueError('Unexpected gas cost currency')
+                    targets.append((key+'_cost', cm, lines[key].priced(self.tariffs['gas'])))
+            for label, meta, curve in targets:
+                hour = lambda ts: session.scalar(select(Statistics).where(
+                    Statistics.metadata_id == meta.id, Statistics.start_ts == ts))
+                anchor, boundary = hour(start-3600), hour(origin-3600)
+                if anchor is None or boundary is None:
+                    raise ValueError('Missing hour row at repair boundary: '+meta.statistic_id)
+                anchor_sum, old_end = numeric(anchor.sum), numeric(boundary.sum)
+                new_end = round(anchor_sum + curve.at(origin), 9)
+                delta = round(new_end - old_end, 9)
+                summary[meta.statistic_id] = {
+                    'window_before': round(old_end-anchor_sum, 6),
+                    'window_after': round(curve.at(origin), 6),
+                    'shift_after_window': round(delta, 6)}
+                for model, step in ((Statistics,3600),(StatisticsShortTerm,300)):
+                    rows = {int(r.start_ts):r for r in session.execute(select(model).where(
+                        model.metadata_id == meta.id, model.start_ts >= start)).scalars()}
+                    # Inside the window: every hour (missing hours are filled);
+                    # five-minute rows only where Recorder still keeps them.
+                    window_starts = range(start, origin, step) if step == 3600 else \
+                        sorted(t for t in rows if t < origin)
+                    for ts in window_starts:
+                        row = rows.get(ts)
+                        total = round(anchor_sum + curve.at(ts+step), 9)
+                        if row is None:
+                            state, reset = None, anchor.last_reset_ts
+                        elif row.sum is not None and abs(float(row.sum)-total) < 1e-8:
+                            continue
+                        else:
+                            state, reset = row.state, row.last_reset_ts
+                        backups.append({'table':model.__tablename__,'metadata_id':meta.id,
+                            'start_ts':ts,'id':row.id if row is not None else None,
+                            'before':None if row is None else {'sum':row.sum,'state':row.state,'last_reset_ts':row.last_reset_ts},
+                            'after':{'sum':total,'state':state,'last_reset_ts':reset}})
+                        changes.append((model,meta.id,ts,row,total,state,reset))
+                    # After the window: shift SUM only, keeping daily changes.
+                    if abs(delta) <= 1e-9:
+                        continue
+                    for ts in sorted(t for t in rows if t >= origin):
+                        row = rows[ts]
+                        if row.sum is None:
+                            continue
+                        total = round(float(row.sum) + delta, 9)
+                        backups.append({'table':model.__tablename__,'metadata_id':meta.id,
+                            'start_ts':ts,'id':row.id,
+                            'before':{'sum':row.sum,'state':row.state,'last_reset_ts':row.last_reset_ts},
+                            'after':{'sum':total,'state':row.state,'last_reset_ts':row.last_reset_ts}})
+                        changes.append((model,meta.id,ts,row,total,row.state,row.last_reset_ts))
+            report = {'mode':'history_repair','source_at':window['at'],
+                      'start_date':window['start_date'],
+                      'accounting_start':datetime.fromtimestamp(origin, ZoneInfo(window['timezone'])).isoformat(),
+                      'timezone':window['timezone'],'rows':len(changes),
+                      'first_short_term':first_short,'statistics':summary,
+                      'resolution':sorted({r for v in resolutions.values() for r in v.values()}),
+                      'dry_run':self.dry_run}
+            if self.dry_run:
+                return report
+            if changes:
+                stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+                path = base/'backups'/('history_repair_'+stamp+'.json')
+                atomic_json(path, {'report':report,'rows':backups})
+                report['backup'] = str(path)
+                for model,mid,ts,row,total,state,reset in changes:
+                    if row is None:
+                        session.add(model(metadata_id=mid,start_ts=ts,sum=total,state=state,last_reset_ts=reset))
+                    else:
+                        row.sum = total
+                session.flush()
+                for model,mid,ts,_,total,state,reset in changes:
+                    row = session.scalar(select(model).where(model.metadata_id==mid,model.start_ts==ts))
+                    if row is None or abs(row.sum-total) > 1e-8 or row.state != state:
+                        raise RuntimeError('History repair SQL verification failed')
+        atomic_json(base/'last_history_repair.json', report)
+        return report
+
+
 class AccountingRuntime:
     def __init__(self,hass,entry,coordinator,entities,config):
         self.hass,self.entry,self.coordinator,self.entities,self.config=hass,entry,coordinator,entities,config
@@ -292,16 +411,7 @@ class AccountingRuntime:
             async with self.hass.data.setdefault('tariff_accounting_lock',asyncio.Lock()):
                 if self.closed:
                     return
-                cost_sensors=self.hass.data.get('energy',{}).get('cost_sensors',{})
-                costmap={mapping[key]:cost_sensors.get(mapping[key])
-                         for key in ('gas_m3_heating','gas_m3_dhw')}
-                if any(not v for v in costmap.values()):
-                    raise ValueError('Energy gas cost sensors are not ready')
-                journal=Path(self.hass.config.path('tariff_cost_manager/pending_transaction.json'))
-                if await self.hass.async_add_executor_job(journal.exists):
-                    raise ValueError('Waiting for tariff transaction recovery')
-                path=Path(self.hass.config.path('tariff_cost_manager/history.json'))
-                tariffs=await self.hass.async_add_executor_job(lambda:json.loads(path.read_text()))
+                costmap,tariffs=await self.cost_inputs(mapping)
                 task=AccountingTask(self,ledger,mapping,costmap,tariffs)
                 get_instance(self.hass).queue_task(task)
                 result=await asyncio.shield(task.future)
@@ -320,6 +430,65 @@ class AccountingRuntime:
             if not self.closed:
                 _LOGGER.warning('Ariston statistics reconciliation pending: %s',exc)
                 self.statistics_status('statistics_pending',str(exc))
+
+    async def cost_inputs(self,mapping):
+        """Gas cost statistics and tariff history; call with the tariff lock held."""
+        cost_sensors=self.hass.data.get('energy',{}).get('cost_sensors',{})
+        costmap={mapping[key]:cost_sensors.get(mapping[key])
+                 for key in ('gas_m3_heating','gas_m3_dhw')}
+        if any(not v for v in costmap.values()):
+            raise ValueError('Energy gas cost sensors are not ready')
+        journal=Path(self.hass.config.path('tariff_cost_manager/pending_transaction.json'))
+        if await self.hass.async_add_executor_job(journal.exists):
+            raise ValueError('Waiting for tariff transaction recovery')
+        path=Path(self.hass.config.path('tariff_cost_manager/history.json'))
+        tariffs=await self.hass.async_add_executor_job(lambda:json.loads(path.read_text()))
+        return costmap,tariffs
+
+    async def repair_history(self,start_date,dry_run=True):
+        """Re-allocate statistics before the accounting start from dated reports.
+
+        Uses the same fresh, cross-checked cloud snapshot as live accounting.
+        Days that the reports do not cover are rejected, never assumed zero.
+        """
+        if self.closed:
+            raise RuntimeError('Accounting runtime is unloaded')
+        first=date.fromisoformat(start_date)
+        accounting_start=date.fromisoformat(self.config['start_date'])
+        if first>=accounting_start:
+            raise ValueError('start_date must be before the accounting start '+self.config['start_date'])
+        from .diagnostics import _report
+        observation=snapshot(_report(self.hass,self.entry))
+        age=(dt_util.now()-datetime.fromisoformat(observation['at'])).total_seconds()
+        if not 0<=age<=15*60:
+            raise ValueError('Waiting for fresh matching Ariston reports')
+        mapping={key:entity.entity_id for key,entity in self.entities.items()}
+        if len(mapping)!=8 or any(not v for v in mapping.values()):
+            raise ValueError('Waiting for all eight existing entity IDs')
+        timezone=self.ledger.get('timezone') or self.hass.config.time_zone
+        days={key:{} for key in KEYS}
+        cursor=first
+        while cursor<accounting_start:
+            for key in KEYS:
+                value=observation['days'][key].get(cursor.isoformat())
+                if value is None:
+                    raise ValueError(f'No dated report for {key} {cursor.isoformat()}')
+                days[key][cursor.isoformat()]=value
+            cursor+=timedelta(days=1)
+        origin=datetime.combine(accounting_start,datetime.min.time(),ZoneInfo(timezone))
+        window={'start_date':first.isoformat(),'timezone':timezone,'at':observation['at'],
+                'through':origin.isoformat(),'days':days,'profiles':{}}
+        async with self.hass.data.setdefault('tariff_accounting_lock',asyncio.Lock()):
+            if self.closed:
+                raise RuntimeError('Accounting runtime is unloaded')
+            costmap,tariffs=await self.cost_inputs(mapping)
+            task=HistoryRepairTask(self,window,origin.timestamp(),mapping,costmap,tariffs,dry_run)
+            get_instance(self.hass).queue_task(task)
+            result=await asyncio.shield(task.future)
+        result['days']={key:days[key] for key in ('gas_m3_heating','gas_m3_dhw')}
+        _LOGGER.warning('Ariston history repair %s: %s rows, backup %s',
+                        'dry run' if dry_run else 'committed',result['rows'],result.get('backup'))
+        return result
 
     def statistics_status(self,status,error=None):
         self.hass.states.async_set('sensor.ariston_accounting_status',status,{
@@ -355,6 +524,9 @@ async def attach(hass,entry,coordinator,sensors):
     if set(entities)!=set(KEYS):
         raise ValueError('Cannot attach accounting: expected all eight counters')
     runtime=AccountingRuntime(hass,entry,coordinator,entities,config)
+    runtimes=hass.data.setdefault('ariston_accounting_runtimes',{})
+    runtimes[entry.unique_id]=runtime
+    entry.async_on_unload(lambda:runtimes.pop(entry.unique_id,None) if runtimes.get(entry.unique_id) is runtime else None)
     for key,entity in entities.items():
         entity._dated_accounting=runtime
         entity._dated_key=key

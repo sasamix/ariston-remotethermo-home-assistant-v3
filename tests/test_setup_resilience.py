@@ -19,7 +19,7 @@ class SetupTests(unittest.IsolatedAsyncioTestCase):
         device=NS(system_type='GALEVO',has_metering=True,gw='test',gateway='test',
                   async_get_features=AsyncMock(),async_update_state=AsyncMock(),async_get_bus_errors=AsyncMock(),async_update_energy=AsyncMock())
         api=NS(async_connect=AsyncMock(return_value=True),async_hello=AsyncMock(return_value=device))
-        hass=NS(data={},config=NS(units='metric'),config_entries=NS(async_forward_entry_setups=AsyncMock()),services=NS(async_register=Mock()))
+        hass=NS(data={},config=NS(units='metric'),config_entries=NS(async_forward_entry_setups=AsyncMock()),services=NS(async_register=Mock(),has_service=Mock(return_value=False)))
         instances={}
         class Coordinator:
             def __init__(self,hass,device,seconds,name,update):
@@ -38,7 +38,9 @@ class SetupTests(unittest.IsolatedAsyncioTestCase):
                    'asyncio':asyncio,'deepcopy':deepcopy,
                    'aiohttp':NS(ClientSession=lambda **kw:NS(closed=False,close=AsyncMock()),CookieJar=lambda **kw:None),
                    'er':NS(async_get=lambda h:NS(async_get_entity_id=lambda *a:None)),
-                   'update_listener':Mock(),'SET_ITEM_BY_ID_SCHEMA':{},'PLATFORMS':['sensor','climate']}
+                   'update_listener':Mock(),'SET_ITEM_BY_ID_SCHEMA':{},'REPAIR_HISTORY_SCHEMA':{},
+                   'SERVICE_REPAIR_HISTORY':'repair_history','async_repair_history_service':AsyncMock(),
+                   'ServiceCall':object,'ServiceResponse':object,'SupportsResponse':NS(OPTIONAL='optional'),'PLATFORMS':['sensor','climate']}
         for key in ('DOMAIN','API_URL_SETTING','ARISTON_API_URL','API_USER_AGENT','ARISTON_USER_AGENT',
                     'CONF_USERNAME','CONF_PASSWORD','CONF_DEVICE','CONF_SCAN_INTERVAL','COORDINATOR',
                     'ENERGY_COORDINATOR','BUS_ERRORS_COORDINATOR','BUS_ERRORS_SCAN_INTERVAL','ENERGY_SCAN_INTERVAL',

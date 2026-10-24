@@ -360,6 +360,20 @@
           "description": "Value to set."
         }
       }
+    },
+    "repair_history": {
+      "name": "Repair history before accounting start",
+      "description": "Rewrite Energy statistics from the start date up to the dated-accounting start using Ariston daily reports. Keeps a JSON backup; defaults to a dry run.",
+      "fields": {
+        "start_date": {
+          "name": "Start date",
+          "description": "First day to repair (YYYY-MM-DD)."
+        },
+        "dry_run": {
+          "name": "Dry run",
+          "description": "Only report what would change."
+        }
+      }
     }
   }
 }
