@@ -29,7 +29,7 @@ class NonblockingTests(unittest.IsolatedAsyncioTestCase):
         loop=asyncio.get_running_loop()
         class Task:
             def __init__(task,*args):task.future=loop.create_future()
-        def create(coro):
+        def create(coro,*args,**kwargs):
             task=asyncio.create_task(coro);self.tasks.append(task);return task
         async def executor(fn):return fn()
         self.ns=dict(asyncio=asyncio,deepcopy=deepcopy,datetime=datetime,timedelta=timedelta,
@@ -41,7 +41,7 @@ class NonblockingTests(unittest.IsolatedAsyncioTestCase):
             get_instance=lambda h:SimpleNamespace(queue_task=self.jobs.append))
         exec(compile(ast.Module(body=[deepcopy(node)],type_ignores=[]),'runtime','exec'),self.ns)
         r=self.r=object.__new__(self.ns['AccountingRuntime'])
-        r.hass=SimpleNamespace(loop=loop,data={},async_create_task=create,async_add_executor_job=executor,
+        r.hass=SimpleNamespace(loop=loop,data={},async_create_task=create,async_create_background_task=create,async_add_executor_job=executor,
             config=SimpleNamespace(time_zone='Asia/Almaty',path=lambda p:self.tmp.name+'/'+p),
             states=SimpleNamespace(async_set=lambda *args:self.states.append(args)))
         r.entry=object();r.config={'start_date':self.ledger['start_date']}
@@ -49,6 +49,7 @@ class NonblockingTests(unittest.IsolatedAsyncioTestCase):
         r.entities={k:SimpleNamespace(entity_id='sensor.'+k,async_write_ha_state=lambda:None) for k in ledger_module.KEYS}
         r.store=SimpleNamespace(async_save=AsyncMock());r.error=None;r.busy=False;r.closed=False
         r.retry_handle=None;r.reconcile_task=None;r.statistics_through=None
+        r.publication_lock=asyncio.Lock()
         self.next=deepcopy(self.ledger)
         # Revise a historical day: all channels must consume the revised curve.
         day=sorted(self.next['days']['electricity_heating'])[0]

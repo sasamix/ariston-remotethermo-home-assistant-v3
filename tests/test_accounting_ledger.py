@@ -43,3 +43,23 @@ class DatedLedgerTests(ReconciliationTests):
         self.assertEqual(ledger,ledger_module.merge(ledger,observation,'2026-10-18','Asia/Almaty'))
         del ledger['days']['gas_kwh_heating']['2026-10-19']
         with self.assertRaises(ValueError): ledger_module.curves(ledger)
+
+    def test_export_daily_total_wins_over_inconsistent_interval_sum(self):
+        # Ariston export 2026-10-24: previous-day intervals sum to 6.80/3.00,
+        # while its completed daily reports are 5.07/2.32 m³. Preserve daily
+        # totals; intervals provide only the distribution within that day.
+        day='2026-10-23'
+        ledger={'start_date':day,'timezone':'Asia/Almaty','through':'2026-10-24T00:00:00+05:00',
+                'days':{key:{day:0.0} for key in ledger_module.KEYS},
+                'profiles':{key:{} for key in ledger_module.KEYS}}
+        samples={'gas_m3_heating':(5.07,[1,.9,.8,1.57,.7,.4,.8,.5,.1,0,.03,0]),
+                 'gas_m3_dhw':(2.32,[0,0,.4,.3,.4,.3,.4,.3,0,0,.5,.4])}
+        for key,(total,profile) in samples.items():
+            ledger['days'][key][day]=total
+            ledger['profiles'][key][day]=profile
+        lines,_=ledger_module.curves(ledger)
+        end=datetime.fromisoformat(ledger['through']).timestamp()
+        for key,(total,_) in samples.items():
+            self.assertAlmostEqual(lines[key].at(end),total,places=8)
+            self.assertAlmostEqual(sum(lines[key].at(t+3600)-lines[key].at(t)
+                                       for t in range(int(end)-86400,int(end),3600)),total,places=8)

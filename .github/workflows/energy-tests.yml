@@ -8,6 +8,8 @@ on:
     paths:
       - "custom_components/ariston/**"
       - "tests/**"
+      - "tests_ha/**"
+      - "scripts/build_integration_package.py"
       - ".github/workflows/energy-tests.yml"
 
 jobs:
@@ -24,3 +26,21 @@ jobs:
         run: python -m compileall -q custom_components/ariston
       - name: Run accounting and lifecycle tests
         run: python -m unittest discover -s tests -v
+
+  home-assistant-compatibility:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Install deployed HA and SDK versions
+        run: python -m pip install "homeassistant==2026.10.2" "ariston==0.19.9"
+      - name: Exercise real HA storage, coordinator, and Recorder models
+        run: python -m unittest discover -s tests_ha -v
+      - name: Build complete integration package
+        run: python scripts/build_integration_package.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ariston-complete-package
+          path: dist/ariston.zip

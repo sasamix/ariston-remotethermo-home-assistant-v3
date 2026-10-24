@@ -52,6 +52,7 @@ class PublicationTests(unittest.TestCase):
             r.store=SimpleNamespace(async_load=load)
             r.config={'seed':{},'start_date':'2026-10-18'}
             r.values={};r.error=None;r.closed=False
+            r.publication_lock=asyncio.Lock()
             r.entry=SimpleNamespace(async_on_unload=lambda f:None)
             r.hass=SimpleNamespace(loop=asyncio.get_running_loop())
             await r.start()

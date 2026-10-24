@@ -181,6 +181,10 @@ class AccountingRuntime:
         self.retry_handle=None
         self.reconcile_task=None
         self.statistics_through=None
+        # Shared across reloads: a previous runtime must finish saving before
+        # the replacement runtime reads or writes the same Store.
+        self.publication_lock=hass.data.setdefault(
+            "ariston_accounting_store_lock_"+entry.unique_id,asyncio.Lock())
 
     def value(self,key):
         return self.values.get(key)
@@ -194,7 +198,8 @@ class AccountingRuntime:
                 'accounting_start_date':self.config['start_date']}
 
     async def start(self):
-        saved=await self.store.async_load()
+        async with self.publication_lock:
+            saved=await self.store.async_load()
         self.ledger=(saved or {}).get('ledger') or deepcopy(self.config['seed'])
         confirmed=(saved or {}).get('values',{})
         if set(confirmed)==set(KEYS) and all(isinstance(v,(int,float)) and not isinstance(v,bool) and isfinite(v) and v>=0 for v in confirmed.values()):
@@ -231,22 +236,31 @@ class AccountingRuntime:
             mapping={key:entity.entity_id for key,entity in self.entities.items()}
             if len(mapping)!=8 or any(not v for v in mapping.values()):
                 raise ValueError('Waiting for all eight existing entity IDs')
-            ledger=merge(self.ledger,observation,self.config['start_date'],self.hass.config.time_zone)
-            if self.values:
-                # Preserve the confirmed lifetime offset. Tariffs and Recorder
-                # must never be prerequisites for a live meter update.
-                old_lines,_=curves(self.ledger)
-                new_lines,_=curves(ledger)
-                old_end=datetime.fromisoformat(self.ledger['through']).timestamp()
-                new_end=datetime.fromisoformat(ledger['through']).timestamp()
-                values={key:round(self.values[key]-old_lines[key].at(old_end)
-                                  +new_lines[key].at(new_end),6) for key in KEYS}
-                if any(not isfinite(v) or v<0 for v in values.values()):
-                    raise ValueError('Invalid reconstructed live meter')
-                await self.publish(ledger,values)
+            async with self.publication_lock:
+                if self.closed:
+                    return
+                ledger=merge(self.ledger,observation,self.config['start_date'],self.hass.config.time_zone)
+                if self.values:
+                    # Preserve the confirmed lifetime offset. Tariffs and Recorder
+                    # must never be prerequisites for a live meter update.
+                    old_lines,_=curves(self.ledger)
+                    new_lines,_=curves(ledger)
+                    old_end=datetime.fromisoformat(self.ledger['through']).timestamp()
+                    new_end=datetime.fromisoformat(ledger['through']).timestamp()
+                    values={key:round(self.values[key]-old_lines[key].at(old_end)
+                                      +new_lines[key].at(new_end),6) for key in KEYS}
+                    if any(not isfinite(v) or v<0 for v in values.values()):
+                        raise ValueError('Invalid reconstructed live meter')
+                    await self.publish(ledger,values)
+            if self.closed:
+                return
             if self.reconcile_task is None or self.reconcile_task.done():
-                self.reconcile_task=self.hass.async_create_task(self.reconcile(ledger,mapping))
+                self.reconcile_task=self.hass.async_create_background_task(
+                    self.reconcile(ledger,mapping), "Ariston statistics reconciliation",
+                    eager_start=False)
         except Exception as exc:
+            if self.closed:
+                return
             message=str(exc)
             if message!=self.error:
                 _LOGGER.warning('Ariston dated accounting paused; retained last values: %s',message)
@@ -295,10 +309,13 @@ class AccountingRuntime:
                     return
                 # Only bootstrap may publish a Recorder result. An older queued
                 # snapshot must never overwrite newer live readings or Store.
-                if not self.values:
-                    await self.publish(ledger,result['values'])
+                async with self.publication_lock:
+                    if self.closed:
+                        return
+                    if not self.values:
+                        await self.publish(ledger,result['values'])
                 self.statistics_through=ledger['through']
-                self.statistics_status('verified' if self.ledger==ledger else 'statistics_pending')
+                self.statistics_status('verified' if not self.error and self.ledger==ledger else 'statistics_pending')
         except Exception as exc:
             if not self.closed:
                 _LOGGER.warning('Ariston statistics reconciliation pending: %s',exc)
