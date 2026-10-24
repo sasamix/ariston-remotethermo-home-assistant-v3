@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.20.4 — 2026-10-24
+
+- New service `ariston.repair_history` (dry run by default, returns a report): rewrites
+  the Energy statistics from `start_date` up to the dated-accounting start using Ariston's
+  daily reports (previous and current month). Each day gets the reported total, spread
+  uniformly over its hours; recorded meter states are kept. All later rows are shifted by
+  the same SUM difference, so their hourly and daily changes stay exactly as they were.
+  Gas cost statistics are recalculated with the tariff history. One Recorder transaction
+  with a JSON backup in `ariston_accounting/backups/`; a repeated run changes nothing.
+- Missing hours inside the repaired window are filled; days without a report, a missing
+  boundary row or a tariff gap abort the repair without changes.
+
 ## 0.20.3 — 2026-10-24
 
 Release of the work merged to `main` on 2026-10-21 … 2026-10-24 (PR #5). Until this
