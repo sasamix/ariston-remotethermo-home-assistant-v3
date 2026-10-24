@@ -55,6 +55,8 @@ class AccountingTask(RecorderTask):
 
     def run(self, instance):
         try:
+            if getattr(self.runtime,"closed",False):
+                raise RuntimeError("Accounting runtime was unloaded before transaction")
             result = self.execute(instance)
         except Exception as exc:
             self.runtime.hass.loop.call_soon_threadsafe(self.finish, None, exc)
@@ -177,6 +179,8 @@ class AccountingRuntime:
         self.busy=False
         self.closed=False
         self.retry_handle=None
+        self.reconcile_task=None
+        self.statistics_through=None
 
     def value(self,key):
         return self.values.get(key)
@@ -227,37 +231,21 @@ class AccountingRuntime:
             mapping={key:entity.entity_id for key,entity in self.entities.items()}
             if len(mapping)!=8 or any(not v for v in mapping.values()):
                 raise ValueError('Waiting for all eight existing entity IDs')
-            cost_sensors=self.hass.data.get('energy',{}).get('cost_sensors',{})
-            costmap={mapping[key]:cost_sensors.get(mapping[key]) for key in ('gas_m3_heating','gas_m3_dhw')}
-            if any(not value for value in costmap.values()):
-                raise ValueError('Energy gas cost sensors are not ready')
-            async with self.hass.data.setdefault("tariff_accounting_lock",asyncio.Lock()):
-                journal=Path(self.hass.config.path('tariff_cost_manager/pending_transaction.json'))
-                if await self.hass.async_add_executor_job(journal.exists):
-                    raise ValueError('Waiting for tariff transaction recovery')
-                path=Path(self.hass.config.path('tariff_cost_manager/history.json'))
-                tariffs=await self.hass.async_add_executor_job(lambda:json.loads(path.read_text()))
-                ledger=merge(self.ledger,observation,self.config['start_date'],self.hass.config.time_zone)
-                task=AccountingTask(self,ledger,mapping,costmap,tariffs)
-                get_instance(self.hass).queue_task(task)
-                result=await asyncio.shield(task.future)
-                if self.closed:
-                    return
-                self.ledger,self.values=ledger,result['values']
-                await self.store.async_save({'ledger':ledger,'values':self.values})
-                if self.error:
-                    _LOGGER.info('Ariston dated accounting resumed')
-                self.error=None
-                for entity in self.entities.values():
-                    entity.async_write_ha_state()
-                # Check the actual published HA states, not just the SQL result.
-                for key, entity in self.entities.items():
-                    state = self.hass.states.get(entity.entity_id)
-                    if state is None or abs(float(state.state) - self.values[key]) > 1e-5:
-                        raise RuntimeError('Published meter does not match accounting: '+entity.entity_id)
-                    if state.attributes.get('energy_counter_source') != 'verified dated R2/API v2 ledger':
-                        raise RuntimeError('Published meter has an obsolete source: '+entity.entity_id)
-                self.hass.states.async_set("sensor.ariston_accounting_status","verified", {"friendly_name":"Проверка учёта Ariston", "through":ledger["through"], "changed_rows":result["rows"], "error":None})
+            ledger=merge(self.ledger,observation,self.config['start_date'],self.hass.config.time_zone)
+            if self.values:
+                # Preserve the confirmed lifetime offset. Tariffs and Recorder
+                # must never be prerequisites for a live meter update.
+                old_lines,_=curves(self.ledger)
+                new_lines,_=curves(ledger)
+                old_end=datetime.fromisoformat(self.ledger['through']).timestamp()
+                new_end=datetime.fromisoformat(ledger['through']).timestamp()
+                values={key:round(self.values[key]-old_lines[key].at(old_end)
+                                  +new_lines[key].at(new_end),6) for key in KEYS}
+                if any(not isfinite(v) or v<0 for v in values.values()):
+                    raise ValueError('Invalid reconstructed live meter')
+                await self.publish(ledger,values)
+            if self.reconcile_task is None or self.reconcile_task.done():
+                self.reconcile_task=self.hass.async_create_task(self.reconcile(ledger,mapping))
         except Exception as exc:
             message=str(exc)
             if message!=self.error:
@@ -268,6 +256,60 @@ class AccountingRuntime:
                 self.retry_handle=self.hass.loop.call_later(30,lambda:self.hass.async_create_task(self.refresh()))
         finally:
             self.busy=False
+
+    async def publish(self,ledger,values):
+        # Save before publication so a restart cannot lose the accepted offset.
+        await self.store.async_save({'ledger':ledger,'values':values})
+        if self.closed:
+            return
+        self.ledger,self.values=ledger,values
+        self.error=None
+        for entity in self.entities.values():
+            entity.async_write_ha_state()
+
+    async def reconcile(self,ledger,mapping):
+        """One background transaction; a slow Recorder never blocks refresh.
+
+        Keep the tariff lock until the actual queued transaction finishes.
+        Cancelling the waiter would not cancel Recorder's database work.
+        """
+        try:
+            self.statistics_status('statistics_pending')
+            async with self.hass.data.setdefault('tariff_accounting_lock',asyncio.Lock()):
+                if self.closed:
+                    return
+                cost_sensors=self.hass.data.get('energy',{}).get('cost_sensors',{})
+                costmap={mapping[key]:cost_sensors.get(mapping[key])
+                         for key in ('gas_m3_heating','gas_m3_dhw')}
+                if any(not v for v in costmap.values()):
+                    raise ValueError('Energy gas cost sensors are not ready')
+                journal=Path(self.hass.config.path('tariff_cost_manager/pending_transaction.json'))
+                if await self.hass.async_add_executor_job(journal.exists):
+                    raise ValueError('Waiting for tariff transaction recovery')
+                path=Path(self.hass.config.path('tariff_cost_manager/history.json'))
+                tariffs=await self.hass.async_add_executor_job(lambda:json.loads(path.read_text()))
+                task=AccountingTask(self,ledger,mapping,costmap,tariffs)
+                get_instance(self.hass).queue_task(task)
+                result=await asyncio.shield(task.future)
+                if self.closed:
+                    return
+                # Only bootstrap may publish a Recorder result. An older queued
+                # snapshot must never overwrite newer live readings or Store.
+                if not self.values:
+                    await self.publish(ledger,result['values'])
+                self.statistics_through=ledger['through']
+                self.statistics_status('verified' if self.ledger==ledger else 'statistics_pending')
+        except Exception as exc:
+            if not self.closed:
+                _LOGGER.warning('Ariston statistics reconciliation pending: %s',exc)
+                self.statistics_status('statistics_pending',str(exc))
+
+    def statistics_status(self,status,error=None):
+        self.hass.states.async_set('sensor.ariston_accounting_status',status,{
+            'friendly_name':'Проверка учёта Ariston',
+            'through':self.statistics_through,
+            'source_through':self.ledger.get('through'),
+            'error':error})
 
 
 async def attach(hass,entry,coordinator,sensors):
