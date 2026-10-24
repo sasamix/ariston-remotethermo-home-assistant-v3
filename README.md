@@ -43,6 +43,8 @@ Feel free to test something else and create new issue / pull request if somethin
 
 For a new installation, add this repository to HACS as a custom **Integration** repository and download it.
 
+To update, use HACS → Ariston NET (sasamix fork) → Update/Redownload and pick the latest release (currently **v0.20.3**), then restart Home Assistant. Releases older than v0.20.3 lack the startup and energy-counter fixes.
+
 ### Migrating an existing Ariston installation without losing data
 
 Do **not** delete the Ariston config entry from **Settings → Devices & services**. The fork deliberately keeps the same Home Assistant domain (`ariston`) and the same entity unique IDs, including the custom R2 gas Energy sensors. Existing entity registry entries, entity IDs, Recorder statistics and Energy Dashboard history therefore remain associated with the same entities.
