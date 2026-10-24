@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.20.6 — 2026-10-24
+
+- Adaptive cloud pacing: every poller runs at its configured speed while the Ariston
+  cloud answers; HTTP 429/5xx, timeouts and connection errors double the interval
+  (up to 30 minutes) and the next successful answer restores it. Authorization errors
+  are not treated as overload.
+- New option "Weekly schedules scan interval" (seconds, default 180, minimum 60).
+  Schedules refresh on their own timer instead of every state poll.
+- Energy: after each two-hour boundary, API v2 + R2 are polled every 2 minutes until
+  the finished interval appears (at most 40 minutes), then back to the normal energy
+  interval; no faster polling when no new data is expected.
+- R2 metering backs off on its own when it fails, without delaying API v2.
+
 ## 0.20.5 — 2026-10-24
 
 - About 80 % fewer cloud requests: weekly DHW/heating programs are refreshed at most
