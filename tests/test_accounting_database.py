@@ -101,6 +101,13 @@ class DatabaseTests(unittest.TestCase):
             self.assertAlmostEqual(cost.sum,1000+(1.44+5.87+10)*76)
         self.assertEqual(self.task.execute(self.instance)['rows'],0)
 
+    def test_stale_queued_snapshot_cannot_rewrite_newer_live_data(self):
+        self.task.runtime.ledger={'at':'2026-10-21T09:00:00+05:00'}
+        with self.assertRaisesRegex(ValueError,'skip stale repair'):
+            self.task.execute(self.instance)
+        with scope(self.sessions()) as session:
+            self.assertEqual(session.scalar(select(func.count()).select_from(Hour)),18)
+
     def test_invalid_last_metadata_rolls_back_everything(self):
         with scope(self.sessions()) as s:s.get(Meta,10).unit_of_measurement='USD'
         with self.assertRaises(ValueError):self.task.execute(self.instance)
@@ -113,8 +120,31 @@ class DatabaseTests(unittest.TestCase):
         self.assertGreater(self.task.execute(self.instance)['rows'],0)
         with scope(self.sessions()) as s:self.assertEqual(s.scalar(select(func.count()).select_from(Hour)),18)
 
-    def test_unconfirmed_future_rows_are_never_flattened(self):
+    def test_existing_tail_is_rebased_for_all_meters_and_costs(self):
         through=int(datetime.fromisoformat(self.ledger['through']).timestamp())
+        with scope(self.sessions()) as session:
+            for mid in range(1,11):
+                for model in (Hour,Short):
+                    session.add(model(metadata_id=mid,start_ts=through,
+                                      sum=12345,state=12345,last_reset_ts=0))
+        self.task.cost_states={'sensor.heat_cost':(700,0),'sensor.dhw_cost':(800,0)}
+        result=self.task.execute(self.instance)
+        lines,_=ledger_module.curves(self.ledger)
+        with scope(self.sessions()) as session:
+            for mid,key in enumerate(ledger_module.KEYS,1):
+                for model in (Hour,Short):
+                    tail=session.scalar(select(model).where(model.metadata_id==mid,model.start_ts==through))
+                    self.assertAlmostEqual(tail.sum,100+lines[key].at(through))
+                    self.assertEqual(tail.state,result['values'][key])
+            for mid,key,value in ((9,'gas_m3_heating',700),(10,'gas_m3_dhw',800)):
+                for model in (Hour,Short):
+                    tail=session.scalar(select(model).where(model.metadata_id==mid,model.start_ts==through))
+                    self.assertAlmostEqual(tail.sum,1000+lines[key].at(through)*76)
+                    self.assertEqual(tail.state,value)
+        self.assertEqual(self.task.execute(self.instance)['rows'],0)
+
+    def test_rows_after_observed_snapshot_are_never_changed(self):
+        through=int(datetime.fromisoformat(self.ledger['at']).timestamp())//3600*3600+3600
         with scope(self.sessions()) as session:
             session.add(Hour(metadata_id=1,start_ts=through,sum=12345,state=12345,last_reset_ts=0))
             session.add(Short(metadata_id=1,start_ts=through,sum=12345,state=12345,last_reset_ts=0))
@@ -161,11 +191,11 @@ class CostBaselineTests(unittest.TestCase):
 
     def test_baseline_untouched_when_recorder_already_compiled_a_newer_hour(self):
         with scope(self.db.sessions()) as s:
-            s.add(Hour(metadata_id=9, start_ts=self.end, sum=5555, state=777, last_reset_ts=0))
+            s.add(Hour(metadata_id=9, start_ts=self.end + 7200, sum=5555, state=777, last_reset_ts=0))
         self.db.task.cost_states = {'sensor.heat_cost': (1234.5, 0.0)}
         self.db.task.execute(self.db.instance)
         with scope(self.db.sessions()) as s:
             row = s.scalar(select(Hour).where(Hour.metadata_id == 9, Hour.start_ts == self.end - 3600))
             self.assertNotEqual(row.state, 1234.5)
-            newer = s.scalar(select(Hour).where(Hour.metadata_id == 9, Hour.start_ts == self.end))
+            newer = s.scalar(select(Hour).where(Hour.metadata_id == 9, Hour.start_ts == self.end + 7200))
             self.assertEqual((newer.sum, newer.state), (5555, 777))

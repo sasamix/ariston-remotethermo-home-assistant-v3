@@ -63,3 +63,22 @@ class DatedLedgerTests(ReconciliationTests):
             self.assertAlmostEqual(lines[key].at(end),total,places=8)
             self.assertAlmostEqual(sum(lines[key].at(t+3600)-lines[key].at(t)
                                        for t in range(int(end)-86400,int(end),3600)),total,places=8)
+
+
+class October25RegressionTests(unittest.TestCase):
+    def test_both_gas_totals_and_midnight_daily_reconciliation(self):
+        import json
+        from pathlib import Path
+        data=json.loads((Path(__file__).parent/'fixtures/energy_sources_oct25.json').read_text())
+        observation=ledger_module.snapshot(data)
+        ledger=ledger_module.merge({},observation,'2026-10-18','Asia/Almaty')
+        lines,_=ledger_module.curves(ledger)
+        midnight=datetime.fromisoformat('2026-10-25T00:00:00+05:00').timestamp()
+        for key,daily,total in [('gas_m3_heating',6.18,1354.95),('gas_m3_dhw',2.29,989.66)]:
+            curve=lines[key]
+            self.assertAlmostEqual(curve.at(midnight)-curve.at(midnight-86400),daily)
+            self.assertAlmostEqual(ledger['meter_bases'][key]+curve.at(2e9),total)
+            # The reconstructed curve is continuous through midnight even
+            # though the cloud's interval and daily reports disagree.
+            points=[curve.at(t) for t in range(int(midnight)-86400,int(midnight)+28801,300)]
+            self.assertTrue(all(b>=a for a,b in zip(points,points[1:])))
