@@ -15,3 +15,8 @@ jobs:
         uses: "hacs/action@main"
         with:
           category: "integration"
+          # This fork is installed as a custom repository, not submitted to
+          # hacs/default. These two checks require repository administration
+          # and concern public-catalog inclusion, not package compatibility.
+          # All manifest, branding, license and package checks remain enabled.
+          ignore: "issues topics"

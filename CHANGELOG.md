@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.20.8 — 2026-10-25
+
+- Complete the 0.20.7 accounting/polling fixes with valid HA translation files.
+  Remove invalid raw-state translation maps; preserve raw state values, select
+  options, scenario names, names of entities and unique IDs. Static name labels
+  remain localized. Dynamic/user-defined scenario names remain literal.
+- Add original community-integration brand assets for HACS package validation.
+- Scope HACS checks to custom-repository installation. Public-catalog admission
+  checks for remote Issues/topics metadata are explicitly excluded; no package,
+  manifest, branding, translation or runtime validation is disabled.
+- Add regression checks for translation schemas and select-option compatibility.
+
 ## 0.20.7 — 2026-10-25
 
 - Fix recurring accounting timer execution on Home Assistant's event loop. New
