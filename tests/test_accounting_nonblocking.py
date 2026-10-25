@@ -32,7 +32,7 @@ class NonblockingTests(unittest.IsolatedAsyncioTestCase):
         def create(coro,*args,**kwargs):
             task=asyncio.create_task(coro);self.tasks.append(task);return task
         async def executor(fn):return fn()
-        self.ns=dict(asyncio=asyncio,deepcopy=deepcopy,datetime=datetime,timedelta=timedelta,
+        self.ns=dict(callback=lambda fn:fn,asyncio=asyncio,deepcopy=deepcopy,datetime=datetime,timedelta=timedelta,
             json=json,Path=Path,isfinite=isfinite,KEYS=ledger_module.KEYS,
             curves=ledger_module.curves,merge=lambda *args:deepcopy(self.next),
             snapshot=lambda d:{'at':datetime.now().astimezone().isoformat()},

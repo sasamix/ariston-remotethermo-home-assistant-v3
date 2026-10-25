@@ -178,7 +178,7 @@ class CoordinatorErrors(unittest.IsolatedAsyncioTestCase):
         class Base:
             def __init__(self,*args,**kwargs):
                 self.update_method=kwargs['update_method'];self.update_interval=kwargs['update_interval'];self.name=kwargs['name']
-        ns={'DataUpdateCoordinator':Base,'ConnectionException':ConnectionException,
+        ns={'asyncio':asyncio,'DataUpdateCoordinator':Base,'ConnectionException':ConnectionException,
             'UpdateFailed':UpdateFailed,'ConfigEntryAuthFailed':AuthFailed,
             'HomeAssistant':object,'AristonBaseDevice':object,'Callable':object,
             'timedelta':timedelta,'DOMAIN':'ariston','_LOGGER':logging.getLogger('test.sdk'),

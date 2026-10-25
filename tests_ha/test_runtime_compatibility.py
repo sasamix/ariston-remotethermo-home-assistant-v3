@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, HassJobType
 from homeassistant.helpers import frame
 from homeassistant.util import dt as dt_util
 from custom_components.ariston.accounting_runtime import AccountingRuntime
@@ -53,6 +53,45 @@ class RealRuntime(unittest.IsolatedAsyncioTestCase):
         await self.hass.async_stop(force=True)
         self.tmp.cleanup()
 
+    async def test_periodic_job_runs_on_event_loop_repeatedly(self):
+        from unittest.mock import AsyncMock
+        timer=self.callbacks[0].__self__
+        self.assertEqual(timer._run_job.job_type,HassJobType.Callback)
+        with patch.object(self.runtime,'refresh',new_callable=AsyncMock) as refresh:
+            for _ in range(2):
+                timer._interval_listener(None)
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+            self.assertEqual(refresh.await_count,2)
+
+    async def test_coordinator_refresh_triggers_accounting_without_cloud_call(self):
+        from unittest.mock import AsyncMock
+        listeners=[]
+        coordinator=SimpleNamespace(async_add_listener=lambda fn:(listeners.append(fn) or (lambda:None)))
+        runtime=AccountingRuntime(self.hass,self.entry,coordinator,self.entities,self.config)
+        await runtime.start()
+        with patch.object(runtime,'refresh',new_callable=AsyncMock) as refresh:
+            listeners[0]()
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            refresh.assert_awaited_once()
+        runtime.close()
+
+    async def test_real_afternoon_report_advances_all_counters(self):
+        data=json.loads((ROOT/'tests/fixtures/energy_sources_oct25_1657.json').read_text())
+        observation=snapshot(data)
+        lock=asyncio.Lock();await lock.acquire()
+        self.hass.data['tariff_accounting_lock']=lock
+        with patch('custom_components.ariston.diagnostics._report',return_value=data), \
+             patch('custom_components.ariston.accounting_runtime.dt_util.now',return_value=datetime.fromisoformat(observation['at'])):
+            await self.runtime.refresh()
+        self.assertEqual(self.runtime.ledger['through'],'2026-10-25T16:00:00+05:00')
+        self.assertGreater(self.runtime.values['gas_m3_heating'],1000)
+        self.assertGreater(self.runtime.values['gas_m3_dhw'],1000)
+        self.assertEqual((await self.runtime.store.async_load())['values'],self.runtime.values)
+        lock.release()
+        await self.runtime.reconcile_task
+
     async def test_real_store_reload_preserves_all_eight_values(self):
         second=AccountingRuntime(self.hass,self.entry,None,self.entities,self.config)
         await second.start()
@@ -80,6 +119,23 @@ class RealRuntime(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(self.hass.async_block_till_done(),1)
         lock.release()
         await self.runtime.reconcile_task
+
+    async def test_hung_cloud_request_times_out_and_recovers(self):
+        gate=asyncio.Event()
+        async def update():
+            await gate.wait()
+            return {'ok':True}
+        c=DeviceDataUpdateCoordinator(self.hass,SimpleNamespace(name='test'),120,'energy',update)
+        timeout=asyncio.timeout
+        with patch('custom_components.ariston.coordinator.asyncio.timeout',side_effect=lambda _:timeout(.01)):
+            await c.async_refresh()
+        self.assertFalse(c.last_update_success)
+        self.assertEqual(c.update_interval.total_seconds(),240)
+        gate.set()
+        await c.async_refresh()
+        self.assertTrue(c.last_update_success)
+        self.assertEqual(c.update_interval.total_seconds(),120)
+        await c.async_shutdown()
 
     async def test_actual_coordinator_recovers_after_http_500(self):
         calls=0

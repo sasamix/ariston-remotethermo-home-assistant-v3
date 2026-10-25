@@ -191,16 +191,16 @@ class AristonOptionsFlow(config_entries.OptionsFlow):
                 {
                     vol.Optional(
                         CONF_SCAN_INTERVAL,
-                        default=scan_interval,
-                    ): int,
+                        default=max(30, scan_interval),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=30, max=3600)),
                     vol.Optional(
                         ENERGY_SCAN_INTERVAL,
-                        default=energy_scan_interval,
-                    ): int,
+                        default=max(2, energy_scan_interval),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=2, max=1440)),
                     vol.Optional(
                         BUS_ERRORS_SCAN_INTERVAL,
-                        default=bus_errors_scan_interval,
-                    ): int,
+                        default=max(60, bus_errors_scan_interval),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=60, max=86400)),
                     vol.Optional(
                         TIME_PROGRAM_SCAN_INTERVAL,
                         default=time_program_scan_interval,

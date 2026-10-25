@@ -636,9 +636,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 # GALEVO p=1 carries finished two-hour periods, but API v2
                 # can publish a new finished period before the configured
                 # hourly energy poll. Read every <=10 minutes to detect it
-                # promptly; R2 still refreshes independently every 2 min.
+                # promptly; R2 shares this refresh and its own error backoff.
                 # Do not accelerate normal/non-GALEVO energy requests.
-                energy_interval_minutes = min(energy_interval_minutes, 10)
+                energy_interval_minutes = max(2, min(energy_interval_minutes, 10))
             energy_coordinator = DeviceDataUpdateCoordinator(
                 hass,
                 device,

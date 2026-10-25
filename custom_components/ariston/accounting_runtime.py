@@ -18,9 +18,14 @@ import time
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, func
+from homeassistant.core import callback
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.db_schema import Statistics, StatisticsMeta, StatisticsShortTerm
 from homeassistant.components.recorder.tasks import RecorderTask
+from homeassistant.components.recorder.statistics import (
+    get_short_term_statistics_run_cache,
+    cache_latest_short_term_statistic_id_for_metadata_id,
+)
 from homeassistant.components.recorder.util import session_scope
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
@@ -61,6 +66,13 @@ class AccountingTask(RecorderTask):
             if getattr(self.runtime,"closed",False):
                 raise RuntimeError("Accounting runtime was unloaded before transaction")
             result = self.execute(instance)
+            # Direct SQL inserts must refresh Recorder's latest-row ID cache.
+            # Otherwise its next compile can use a row before our repair.
+            cache = get_short_term_statistics_run_cache(instance.hass)
+            with session_scope(session=instance.get_session()) as session:
+                for metadata_id in result["metadata_ids"]:
+                    cache_latest_short_term_statistic_id_for_metadata_id(
+                        cache, session, metadata_id)
         except Exception as exc:
             self.runtime.hass.loop.call_soon_threadsafe(self.finish, None, exc)
         else:
@@ -77,6 +89,9 @@ class AccountingTask(RecorderTask):
     def execute(self, instance):
         origin = int(datetime.fromisoformat(self.ledger['start_date']).replace(
             tzinfo=ZoneInfo(self.ledger['timezone'])).timestamp())
+        current = getattr(self.runtime, 'ledger', {})
+        if current.get('at') and current['at'] != self.ledger['at']:
+            raise ValueError('Newer accounting snapshot is waiting; skip stale repair')
         now = int(time.time())
         lines, resolutions = curves(self.ledger)
         through = datetime.fromisoformat(self.ledger['through']).timestamp()
@@ -130,10 +145,16 @@ class AccountingTask(RecorderTask):
                     for model, step in ((Statistics,3600),(StatisticsShortTerm,300)):
                         begin = origin if step==3600 else max(origin, int(first_short))
                         end = (int(min(now, through))//step)*step
+                        # Rebase only already compiled rows observed with this
+                        # snapshot. The meter is held after `through`; these are
+                        # provisional holds, not additional measured consumption.
+                        observed_end = int(min(now, datetime.fromisoformat(
+                            self.ledger['at']).timestamp())) // step * step
                         rows = {int(r.start_ts):r for r in session.execute(select(model).where(
                             model.metadata_id==target.id, model.start_ts>=begin,
-                            model.start_ts<end)).scalars()}
-                        for start in range(begin,end,step):
+                            model.start_ts<max(end, observed_end))).scalars()}
+                        starts = sorted(set(range(begin,end,step)) | set(rows))
+                        for start in starts:
                             row = rows.get(start)
                             total = round(sum_base+curve.at(start+step),9)
                             state = round(state_base+curve.at(start+step),6) if meter else (row.state if row is not None else None)
@@ -141,8 +162,8 @@ class AccountingTask(RecorderTask):
                             # are revisions, never a new lifetime/yearly meter reset.
                             reset = 0.0 if meter else (row.last_reset_ts if row is not None else None)
                             newest = session.scalar(select(func.max(model.start_ts)).where(
-                                model.metadata_id==target.id)) if (not meter and step==3600 and start==end-step) else None
-                            if (not meter and step == 3600 and start == end-step
+                                model.metadata_id==target.id)) if (not meter and start==starts[-1]) else None
+                            if (not meter and start == starts[-1]
                                     and target.statistic_id in cost_states
                                     and (newest is None or newest <= start)):
                                 # The newest compiled cost row is the baseline
@@ -162,6 +183,8 @@ class AccountingTask(RecorderTask):
                             changes.append((model,target.id,start,row,total,state,reset))
             report = {'source_at':self.ledger['at'], 'through':self.ledger['through'],
                       'start_date':self.ledger['start_date'], 'timezone':self.ledger['timezone'],
+                      'metadata_ids':[m.id for m in metadata.values()],
+                      'provisional_holds_through':self.ledger['at'],
                       'rows':len(changes), 'values':values, 'resolution':resolutions,
                       'dry_run':self.dry_run}
             if self.dry_run:
@@ -198,6 +221,8 @@ class AccountingRuntime:
         self.retry_handle=None
         self.reconcile_task=None
         self.statistics_through=None
+        self.last_attempt=None
+        self.last_success=None
         # Shared across reloads: a previous runtime must finish saving before
         # the replacement runtime reads or writes the same Store.
         self.publication_lock=hass.data.setdefault(
@@ -223,11 +248,15 @@ class AccountingRuntime:
             self.values=dict(confirmed)
         # Restore only previously committed values, never archived seed values.
         # Fresh source validation precedes every new Recorder transaction.
-        def tick(_now):
+        @callback
+        def tick(_now=None):
             if not self.closed:
-                self.hass.async_create_task(self.refresh())
+                self.hass.async_create_background_task(
+                    self.refresh(), "Ariston live accounting refresh", eager_start=False)
         cancel=async_track_time_interval(self.hass,tick,timedelta(minutes=5))
         self.entry.async_on_unload(cancel)
+        if self.coordinator is not None:
+            self.entry.async_on_unload(self.coordinator.async_add_listener(tick))
         self.entry.async_on_unload(self.close)
         self.retry_handle=self.hass.loop.call_later(30,tick,None)
 
@@ -237,9 +266,15 @@ class AccountingRuntime:
             self.retry_handle.cancel()
 
     async def refresh(self):
-        if self.busy or self.closed:
+        if self.closed:
+            return
+        if self.busy:
+            attempted=getattr(self,'last_attempt',None)
+            if attempted and (dt_util.now()-datetime.fromisoformat(attempted)).total_seconds()>120:
+                self.statistics_status('waiting','Live accounting refresh is taking too long')
             return
         self.busy=True
+        self.last_attempt=dt_util.now().isoformat()
         if self.retry_handle:
             self.retry_handle.cancel()
             self.retry_handle=None
@@ -295,6 +330,7 @@ class AccountingRuntime:
             return
         self.ledger,self.values=ledger,values
         self.error=None
+        self.last_success=dt_util.now().isoformat()
         for entity in self.entities.values():
             entity.async_write_ha_state()
 
@@ -362,6 +398,9 @@ class AccountingRuntime:
             'friendly_name':'Проверка учёта Ariston',
             'through':self.statistics_through,
             'source_through':self.ledger.get('through'),
+            'last_attempt':getattr(self,'last_attempt',None),
+            'last_success':getattr(self,'last_success',None),
+            'source_received_at':self.ledger.get('at'),
             'error':error})
 
 

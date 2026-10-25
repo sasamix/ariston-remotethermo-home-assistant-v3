@@ -33,6 +33,15 @@ class PacingTests(unittest.TestCase):
         self.assertEqual([pacing.backoff_interval(base, n).total_seconds() / 60 for n in range(6)],
                          [3, 6, 12, 24, 30, 30])
 
+    def test_r2_http_errors_and_long_outages(self):
+        for status in (429,500,503):
+            self.assertTrue(pacing.is_overload(RuntimeError(f'R2 metering returned HTTP {status}')))
+        self.assertFalse(pacing.is_overload(RuntimeError('R2 metering returned HTTP 401')))
+        class ClientConnectorDNSError(ClientConnectorError):
+            pass
+        self.assertTrue(pacing.is_overload(ClientConnectorDNSError('DNS failed')))
+        self.assertEqual(pacing.backoff_interval(timedelta(minutes=2),10000),timedelta(minutes=30))
+
     def test_pacer_due_success_failure(self):
         now = datetime(2026, 10, 24, 6, tzinfo=timezone.utc)
         p = pacing.AdaptivePacer(timedelta(minutes=3))

@@ -135,7 +135,7 @@ def _report(hass: HomeAssistant, entry: ConfigEntry, selected_device_id: str | N
     kwh = getattr(device, "r2_kwh_data", None)
     raw = getattr(device, "r2_kwh_raw", None)
     report = {
-        "build": "2026-10-24-adaptive-pacing",
+        "build": "2026-10-25-accounting-timer",
         "coordinators": {
             name: {
                 "present": config_data.get(name) is not None,
@@ -162,6 +162,10 @@ def _report(hass: HomeAssistant, entry: ConfigEntry, selected_device_id: str | N
             getattr(device, "energy_sequences_snapshot", None)
         ),
     }
+    status = hass.states.get('sensor.ariston_accounting_status')
+    report['accounting_status'] = ({'state':status.state,
+        **{key:_scalar(value) for key,value in status.attributes.items()}}
+        if status else None)
     return report
 
 
