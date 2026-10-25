@@ -20,7 +20,7 @@ class EnergyPollingTests(unittest.TestCase):
             if "device.system_type == SystemType.GALEVO" not in condition:
                 continue
             body = [ast.unparse(item) for item in node.body]
-            if any("energy_interval_minutes = min(energy_interval_minutes, 10)"
+            if any("energy_interval_minutes = max(2, min(energy_interval_minutes, 10))"
                    in item for item in body):
                 candidates.append(node)
         self.assertEqual(len(candidates), 1)

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.20.7 — 2026-10-25
+
+- Fix recurring accounting timer execution on Home Assistant's event loop. New
+  energy responses now also trigger local accounting immediately, with no extra
+  cloud requests. Keep last accepted readings on cloud failures.
+- Set the default energy poll to two minutes; GALEVO effective cadence is bounded
+  to 2–10 minutes, retaining slower configured polling up to that existing cap.
+  Existing explicit options remain in place. Validate positive option ranges.
+- Correct R2 HTTP 429/5xx and DNS backoff, cap prolonged-outage arithmetic, and
+  bound SDK coordinator requests to 90 seconds. Preserve auth error handling.
+- Repair the seam between reconstructed statistics and existing provisional
+  rows; refresh Recorder's latest short-term row cache. Align gas cost baselines
+  in both statistics resolutions, and skip superseded queued repairs.
+- Expose accounting attempt/success timestamps in status and diagnostics.
+- Preserve entity IDs, daily source totals, reset markers and tariff history.
+
 ## 0.20.6 — 2026-10-24
 
 - Adaptive cloud pacing: every poller runs at its configured speed while the Ariston

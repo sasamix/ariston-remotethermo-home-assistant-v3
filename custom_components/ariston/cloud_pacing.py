@@ -8,6 +8,7 @@ the next successful answer. Authorization failures are not overload.
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import datetime, timedelta
 
 MAX_BACKOFF = timedelta(minutes=30)
@@ -24,16 +25,26 @@ def is_overload(error: BaseException) -> bool:
         status = getattr(error, "status", None)
     if isinstance(status, int):
         return status == 429 or status >= 500
-    name = type(error).__name__
+    if isinstance(error, RuntimeError):
+        match = re.fullmatch(r"R2 metering returned HTTP (\d{3})", str(error))
+        if match:
+            status = int(match[1])
+            return status == 429 or status >= 500
+    names = {cls.__name__ for cls in type(error).__mro__}
     # aiohttp client errors without importing aiohttp here.
-    return name in {"ClientConnectionError", "ClientConnectorError", "ServerDisconnectedError",
-                    "ServerTimeoutError", "ClientOSError"}
+    return bool(names & {"ClientConnectionError", "ClientConnectorError", "ServerDisconnectedError",
+                    "ServerTimeoutError", "ClientOSError", "ClientConnectorDNSError"})
 
 
 def backoff_interval(base: timedelta, failures: int, maximum: timedelta = MAX_BACKOFF) -> timedelta:
     """Base interval doubled per consecutive overload failure, capped."""
     if failures <= 0:
         return base
+    if base >= maximum:
+        return base
+    # Bound the exponent before timedelta multiplication (long outages).
+    if failures >= 32:
+        return maximum
     return max(base, min(base * (2 ** failures), maximum))
 
 

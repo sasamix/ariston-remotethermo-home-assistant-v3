@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from collections.abc import Callable
 from datetime import timedelta
 import logging
@@ -41,7 +43,8 @@ class DeviceDataUpdateCoordinator(DataUpdateCoordinator):
 
         async def async_update_with_errors():
             try:
-                result = await async_update_state()
+                async with asyncio.timeout(90):
+                    result = await async_update_state()
             except ConnectionException as error:
                 status = error.args[0] if error.args else None
                 if status in (401, 403):

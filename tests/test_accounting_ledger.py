@@ -82,3 +82,12 @@ class October25RegressionTests(unittest.TestCase):
             # though the cloud's interval and daily reports disagree.
             points=[curve.at(t) for t in range(int(midnight)-86400,int(midnight)+28801,300)]
             self.assertTrue(all(b>=a for a,b in zip(points,points[1:])))
+
+    def test_afternoon_source_already_contains_missing_intervals(self):
+        import json
+        from pathlib import Path
+        data=json.loads((Path(__file__).parent/'fixtures/energy_sources_oct25_1657.json').read_text())
+        observation=ledger_module.snapshot(data)
+        self.assertEqual(observation['through'],'2026-10-25T16:00:00+05:00')
+        self.assertAlmostEqual(observation['meter_totals']['gas_m3_heating'],1362.04)
+        self.assertAlmostEqual(observation['meter_totals']['gas_m3_dhw'],990.86)

@@ -43,7 +43,7 @@ class PublicationTests(unittest.TestCase):
         keys=('electricity_heating','electricity_dhw','gas_kwh_heating','gas_kwh_dhw',
               'total_heating','total_dhw','gas_m3_heating','gas_m3_dhw')
         saved={k:0.0 if k.endswith('dhw') else 12.3 for k in keys}
-        ns={'KEYS':keys,'isfinite':__import__('math').isfinite,'deepcopy':__import__('copy').deepcopy,
+        ns={'callback':lambda fn:fn,'KEYS':keys,'isfinite':__import__('math').isfinite,'deepcopy':__import__('copy').deepcopy,
             'timedelta':timedelta,'async_track_time_interval':lambda *args:lambda:None}
         exec(compile(ast.Module(body=[node],type_ignores=[]),'runtime','exec'),ns)
         async def run():
@@ -51,7 +51,7 @@ class PublicationTests(unittest.TestCase):
             async def load():return {'ledger':{'through':'2026-10-21T14:00:00+05:00'},'values':saved}
             r.store=SimpleNamespace(async_load=load)
             r.config={'seed':{},'start_date':'2026-10-18'}
-            r.values={};r.error=None;r.closed=False
+            r.values={};r.error=None;r.closed=False;r.coordinator=None
             r.publication_lock=asyncio.Lock()
             r.entry=SimpleNamespace(async_on_unload=lambda f:None)
             r.hass=SimpleNamespace(loop=asyncio.get_running_loop())
