@@ -55,3 +55,17 @@ R2 429/5xx string errors and aiohttp DNS subclasses now trigger backoff.
 Validation includes Home Assistant 2026.10.3, Python 3.14.8 and ariston 0.19.9.
 No claim is made to have installed the build on the user's HA or queried their
 cloud account. The release workflow separately tests HA 2026.10.2.
+
+## Release 0.20.8 validation completion
+
+Hassfest rejected raw-state maps with uppercase enum keys and Cyrillic dynamic
+scenario names. Removing these invalid maps preserves the entity state and
+service option contract; it does mean those raw enum states use HA's literal
+fallback display instead of the removed invalid localized map. Entity-name
+translations remain. Raw values such as Comfort and CUBE_METER are not renamed.
+
+HACS community-brand assets are original neutral boiler artwork, not a vendor
+logo. The custom repository does not claim admission to the public HACS catalog.
+The Issues/topics remote-administration checks are excluded explicitly in the
+custom-repository workflow; all actual package checks remain enabled. This is
+not a statement that the public-catalog criteria pass.

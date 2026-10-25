@@ -68,8 +68,21 @@ jobs:
       - run: python -m unittest discover -s tests_ha -v
       - run: python scripts/build_integration_package.py
 
+  package-validation:
+    needs: version
+    if: needs.version.outputs.exists == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
+      - uses: hacs/action@main
+        with:
+          category: integration
+          # Admission to hacs/default is outside this custom fork's scope.
+          ignore: "issues topics"
+
   release:
-    needs: [version, tests, home-assistant-compatibility]
+    needs: [version, tests, home-assistant-compatibility, package-validation]
     if: needs.version.outputs.exists == 'false'
     runs-on: ubuntu-latest
     steps:
