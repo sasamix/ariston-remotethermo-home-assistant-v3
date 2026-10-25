@@ -43,7 +43,11 @@ Feel free to test something else and create new issue / pull request if somethin
 
 For a new installation, add this repository to HACS as a custom **Integration** repository and download it.
 
-To update, use HACS → Ariston NET (sasamix fork) → Update/Redownload and pick the latest release (currently **v0.20.3**), then restart Home Assistant. Releases older than v0.20.3 lack the startup and energy-counter fixes.
+To update, use HACS → Ariston NET (sasamix fork) → Update/Redownload and pick the latest release (**v0.20.8** or newer), then restart Home Assistant. Releases older than v0.20.3 lack the startup and energy-counter fixes. Version 0.20.8 includes the recurring accounting timer and statistics reconciliation fixes from 0.20.7, plus validated package translations and branding.
+
+For frequent cloud updates, set **Energy scan interval** to **2 minutes** in the existing integration options. Existing explicit settings are retained. GALEVO polling is bounded to 2–10 minutes; HTTP overload, DNS failures and timeouts increase the pause automatically, up to 30 minutes. New energy responses trigger local accounting immediately without another cloud request. Cloud measurements remain two-hour reports; polling faster does not create instantaneous measurements.
+
+This fork is installed as a **custom HACS repository**. The HACS workflow validates package contents, manifest, branding and license; the remote Issues/topics criteria for admission to the shared `hacs/default` catalog are explicitly outside that workflow's scope. Hassfest and runtime tests must pass before automatic release publication. Raw state values and scenario names remain compatible; invalid state translation maps have been removed, so their display uses literal values while entity names remain localized.
 
 ### Migrating an existing Ariston installation without losing data
 
