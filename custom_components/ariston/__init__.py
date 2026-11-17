@@ -18,7 +18,9 @@ import aiohttp
 import voluptuous as vol
 
 from ariston import Ariston, DeviceAttribute, SystemType
+from ariston.ariston_api import AristonAPI, ConnectionException
 from ariston.const import ARISTON_API_URL, ARISTON_USER_AGENT
+from ariston.galevo_device import AristonGalevoDevice
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -34,6 +36,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.storage import Store
+from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util.unit_system import METRIC_SYSTEM
 from homeassistant.util import dt as dt_util
 
@@ -52,6 +56,7 @@ from .const import (
     DEFAULT_TIME_PROGRAM_SCAN_INTERVAL_SECONDS,
     TIME_PROGRAM_SCAN_INTERVAL,
 )
+from .cloud_governor import CloudGovernor, CloudPaused, category_of, is_block
 from .cloud_pacing import AdaptivePacer
 from .coordinator import DeviceDataUpdateCoordinator
 from .dhw_scenarios import async_setup_dhw_scenario_manager
@@ -77,6 +82,14 @@ PACING_TICK = timedelta(seconds=30)  # local due-check only, no request
 # minutes later. Poll energy faster until it arrives, then fall back.
 ENERGY_BURST_INTERVAL = timedelta(minutes=2)
 ENERGY_BURST_WINDOW = timedelta(minutes=40)
+# Outside the post-boundary window no new energy interval is expected.
+ENERGY_QUIET_INTERVAL = timedelta(minutes=15)
+# menuItems carry only signal strength and heating return temperature.
+MENU_ITEMS_REFRESH = timedelta(minutes=15)
+# Ariston energy settings/account (costs, last month) change rarely.
+ENERGY_AUX_REFRESH = timedelta(hours=6)
+GOVERNOR_STATUS_ENTITY = "sensor.ariston_cloud_status"
+GOVERNORS = "ariston_cloud_governors"
 ATTR_ITEM_ID = "item_id"
 ATTR_ZONE = "zone"
 ATTR_VALUE = "value"
@@ -99,12 +112,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         api_user_agent = entry.data.get(API_USER_AGENT, ARISTON_USER_AGENT)
 
-        reponse = await ariston.async_connect(
+        governor, publish_governor = await async_get_governor(hass, entry)
+        if governor.paused(dt_util.utcnow()):
+            # Ariston blocked this account; do not even log in until the
+            # pause ends (a reload must not restart the block).
+            raise ConfigEntryNotReady(
+                f"Ariston cloud paused until {governor.paused_until.isoformat()}"
+            )
+
+        # Same as Ariston.async_connect(), with every request of the
+        # account passing through the governor (including the login).
+        ariston.api = AristonAPI(
             entry.data[CONF_USERNAME],
             entry.data[CONF_PASSWORD],
             api_url_setting,
             api_user_agent,
         )
+        govern_api(ariston.api, governor, publish_governor)
+        reponse = await ariston.api.async_connect()
         if not reponse:
             _LOGGER.error(
                 "Failed to connect to Ariston with device: %s",
@@ -122,6 +147,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await device.async_get_features()
 
         original_async_update_state = device.async_update_state
+        menu_refresh = {"at": None}
+
+        async def async_update_galevo_state():
+            """Properties every poll; menuItems (2 diagnostic values) rarely."""
+            now = dt_util.utcnow()
+            if not governor.allow(now, "high", 1, "state"):
+                return None  # over the hourly budget: keep the last state
+            if len(device.features) == 0:
+                await device.async_get_features()
+            data = await device.api.async_get_properties(
+                device.gw, device.features, device.language_tag, device.umsys,
+            )
+            if data is None:
+                raise UpdateFailed("Ariston returned no device properties")
+            device.data = data
+            last = menu_refresh["at"]
+            if (last is None or now - last >= MENU_ITEMS_REFRESH) and governor.allow(
+                    now, "normal", 1, "menu_items"):
+                menu_refresh["at"] = now
+                try:
+                    device.menu_items = await device.api.async_get_menu_items(device.gw)
+                except CloudPaused:
+                    pass
+                except Exception as err:  # keep previous diagnostics values
+                    _LOGGER.debug("Ariston menuItems unavailable: %r", err)
+            device._update_state()
+            return None
 
         async def async_update_state_resilient():
             """Update normal device state even if Ariston menuItems temporarily returns 500.
@@ -134,7 +186,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             """
             try:
                 return await original_async_update_state()
+            except CloudPaused:
+                raise
             except Exception as err:
+                if is_block(err):
+                    raise  # retrying during a block only extends it
                 _LOGGER.warning(
                     "Ariston full state update failed (%r); retrying essential properties only",
                     err,
@@ -269,8 +325,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             device,
             scan_interval_seconds,
             COORDINATOR,
-            async_update_state_resilient,
+            async_update_galevo_state
+            if isinstance(device, AristonGalevoDevice)
+            else async_update_state_resilient,
         )
+        coordinator.governor = governor
 
         hass.data.setdefault(DOMAIN, {}).setdefault(
             entry.unique_id, {COORDINATOR: {}, ENERGY_COORDINATOR: {}}
@@ -288,12 +347,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
             async def async_time_program_tick(_now):
                 # Local check only; a request is made when the pacer is due.
-                if program_pacer.due(dt_util.utcnow()):
+                now = dt_util.utcnow()
+                cost = 1 + len([zone for zone in device.zone_numbers if zone])
+                if program_pacer.due(now) and governor.allow(now, "low", cost, "time_programs"):
                     await async_refresh_time_programs()
+                publish_governor()
 
             entry.async_on_unload(
                 async_track_time_interval(hass, async_time_program_tick, PACING_TICK)
             )
+
+        async def async_update_bus_errors():
+            if governor.allow(dt_util.utcnow(), "low", 1, "bus_errors"):
+                await device.async_get_bus_errors()
 
         bus_errors_scan_interval_seconds = entry.options.get(
             BUS_ERRORS_SCAN_INTERVAL, DEFAULT_BUS_ERRORS_SCAN_INTERVAL_SECONDS
@@ -303,8 +369,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             device,
             bus_errors_scan_interval_seconds,
             BUS_ERRORS_COORDINATOR,
-            device.async_get_bus_errors,
+            async_update_bus_errors,
         )
+        bus_errors_coordinator.governor = governor
         hass.data[DOMAIN][entry.unique_id][BUS_ERRORS_COORDINATOR] = (
             bus_errors_coordinator
         )
@@ -322,6 +389,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
             web_base_url = "https://www.ariston-net.remotethermo.com"
             web_session = aiohttp.ClientSession(
+                trace_configs=[governor_trace(governor, publish_governor)],
                 cookie_jar=aiohttp.CookieJar(unsafe=True),
                 headers={
                     "User-Agent": (
@@ -599,12 +667,39 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                          and now - block_start < ENERGY_BURST_WINDOW)
                 coordinator_ = hass.data[DOMAIN][entry.unique_id].get(ENERGY_COORDINATOR)
                 if isinstance(coordinator_, DeviceDataUpdateCoordinator):
-                    coordinator_.preferred_interval = ENERGY_BURST_INTERVAL if burst else None
+                    coordinator_.preferred_interval = (
+                        ENERGY_BURST_INTERVAL if burst
+                        else max(coordinator_.base_interval, ENERGY_QUIET_INTERVAL)
+                        if device.system_type == SystemType.GALEVO else None
+                    )
+
+            energy_aux = {"at": None}
+
+            async def async_update_api_energy():
+                """API v2 energy; for GALEVO the settings/account part rarely."""
+                if not isinstance(device, AristonGalevoDevice):
+                    return await original_async_update_energy()
+                now = dt_util.utcnow()
+                last = energy_aux["at"]
+                if (last is None or now - last >= ENERGY_AUX_REFRESH) and governor.allow(
+                        now, "low", 3, "energy_aux"):
+                    energy_aux["at"] = now
+                    return await original_async_update_energy()
+                # Only the consumption sequences (one request).
+                return await super(AristonGalevoDevice, device).async_update_energy()
+
+            def energy_priority():
+                coordinator_ = hass.data[DOMAIN][entry.unique_id].get(ENERGY_COORDINATOR)
+                burst = getattr(coordinator_, "preferred_interval", None) == ENERGY_BURST_INTERVAL
+                return "high" if burst or energy_burst["block"] is None else "low"
 
             async def async_update_energy_with_web_metering():
                 """Refresh normal API energy plus optional native R2 m³ data."""
+                if not governor.allow(dt_util.utcnow(), energy_priority(), 2, "energy"):
+                    schedule_energy_burst()
+                    return None  # keep the last energy data within the budget
                 api_started = dt_util.now()
-                result = await original_async_update_energy()
+                result = await async_update_api_energy()
                 api_finished = dt_util.now()
                 if (api_started.date() == api_finished.date()
                         and api_started.hour // 2 == api_finished.hour // 2):
@@ -647,6 +742,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 async_update_energy_with_web_metering,
             )
             hass.data[DOMAIN][entry.unique_id][ENERGY_COORDINATOR] = energy_coordinator
+            energy_coordinator.governor = governor
             try:
                 await energy_coordinator.async_config_entry_first_refresh()
             except ConfigEntryNotReady:
@@ -709,6 +805,77 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         raise ConfigEntryNotReady from error
 
     return True
+
+
+async def async_get_governor(hass: HomeAssistant, entry: ConfigEntry):
+    """Account governor that survives reloads (kept in hass.data and a Store)."""
+    governors = hass.data.setdefault(GOVERNORS, {})
+    holder = governors.get(entry.entry_id)
+    if holder is None:
+        store = Store(hass, 1, f"ariston_cloud_governor.{entry.entry_id}")
+        saved = await store.async_load()
+        governor = CloudGovernor(dt_util.utcnow(), saved)
+        state = {"saved_at": None}
+
+        def publish(persist: bool = False) -> None:
+            now = dt_util.utcnow()
+            status = governor.status(now)
+            hass.states.async_set(
+                GOVERNOR_STATUS_ENTITY,
+                status.pop("state"),
+                {**status, "friendly_name": "Ariston: облако", "icon": "mdi:cloud-lock-outline"},
+            )
+            last = state["saved_at"]
+            if persist or last is None or now - last >= timedelta(minutes=30):
+                state["saved_at"] = now
+                store.async_delay_save(governor.to_store, 5)
+
+        holder = governors[entry.entry_id] = (governor, publish)
+    return holder
+
+
+def govern_api(api, governor: CloudGovernor, publish) -> None:
+    """Route every request of this AristonAPI instance through the governor."""
+    original = api._AristonAPI__async_request
+
+    async def governed(method, path, params=None, body=None, is_retry=False):
+        governor.before_request(dt_util.utcnow(), category_of(str(path)))
+        try:
+            result = await original(method, path, params, body, is_retry)
+        except ConnectionException as error:
+            if is_block(error):
+                governor.after_block(dt_util.utcnow())
+                _LOGGER.warning(
+                    "Ariston blocked the account (%s requests in the last hour); "
+                    "all cloud requests paused until %s, budget now %s/h",
+                    governor.status(dt_util.utcnow())["requests_last_hour"],
+                    governor.paused_until, governor.budget,
+                )
+                publish(True)
+            raise
+        governor.after_success(dt_util.utcnow())
+        return result
+
+    api._AristonAPI__async_request = governed
+
+
+def governor_trace(governor: CloudGovernor, publish) -> aiohttp.TraceConfig:
+    """Count R2 web requests of the same account and honour its blocks."""
+    trace = aiohttp.TraceConfig()
+
+    async def on_start(session, context, params):
+        governor.before_request(dt_util.utcnow(), "r2")
+
+    async def on_end(session, context, params):
+        if params.response.status == 429:
+            governor.after_block(dt_util.utcnow())
+            publish(True)
+        elif params.response.status < 400:
+            governor.after_success(dt_util.utcnow())
+
+    trace.on_request_start.append(on_start)
+    trace.on_request_end.append(on_end)
+    return trace
 
 
 async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:

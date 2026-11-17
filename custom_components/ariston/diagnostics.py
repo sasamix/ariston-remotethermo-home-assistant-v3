@@ -135,7 +135,8 @@ def _report(hass: HomeAssistant, entry: ConfigEntry, selected_device_id: str | N
     kwh = getattr(device, "r2_kwh_data", None)
     raw = getattr(device, "r2_kwh_raw", None)
     report = {
-        "build": "2026-10-25-accounting-timer",
+        "build": "2026-11-18-account-governor",
+        "cloud_governor": _governor_status(hass, entry),
         "coordinators": {
             name: {
                 "present": config_data.get(name) is not None,
@@ -181,3 +182,12 @@ async def async_get_device_diagnostics(
 ) -> dict[str, Any]:
     """Return downloadable device diagnostics, including orphaned old meter states."""
     return _report(hass, entry, selected_device_id=device.id)
+
+
+def _governor_status(hass, entry):
+    """Account-wide request counters and pause state (no credentials)."""
+    from homeassistant.util import dt as dt_util
+    holder = hass.data.get("ariston_cloud_governors", {}).get(getattr(entry, "entry_id", None))
+    if not holder:
+        return None
+    return holder[0].status(dt_util.utcnow())
