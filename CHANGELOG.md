@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.21.0 — 2026-11-18
+
+Ariston answers `429 Requests are blocked` when one account sends too many requests.
+Since 0.20.7 the integration sent about 200 requests per hour (energy every 2 minutes,
+schedules every 3 minutes, menuItems with every state poll, SDK retries on 5xx), and
+every poller backed off and probed on its own, so blocks kept coming back.
+
+- Account-wide governor: every request of the account (API login, state, schedules,
+  energy, bus errors, R2 web) passes one counter with a rolling one-hour budget.
+- On a 429 *all* cloud traffic pauses (10 → 20 → 40 → 60 minutes), then one probe.
+  The budget drops to 70 % of the rate that was blocked and grows by 10/h after three
+  hours without a block only when it actually held work back, so it settles just under
+  Ariston's limit. The pause and the learned budget survive reloads and restarts;
+  a reload during a pause does not log in.
+- While paused, entities keep their last values for up to 2 hours instead of becoming
+  unavailable.
+- Priorities: device state and energy right after a two-hour boundary may use the whole
+  budget; menuItems 85 %; schedules, bus errors and quiet-time energy 60 %.
+- Fewer requests for the same data: menuItems (signal strength, return temperature)
+  every 15 minutes; energy every 15 minutes outside the post-boundary window; GALEVO
+  energy settings/account every 6 hours (sequences only otherwise). The "properties
+  only" retry no longer runs during a block.
+- New state `sensor.ariston_cloud_status` (ok / paused / probing) with requests in the
+  last hour, budget, per-category counts, skipped work and last block; the same data is
+  in diagnostics.
+
 ## 0.20.8 — 2026-10-25
 
 - Complete the 0.20.7 accounting/polling fixes with valid HA translation files.

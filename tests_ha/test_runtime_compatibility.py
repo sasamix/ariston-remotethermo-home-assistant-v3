@@ -189,3 +189,41 @@ class RealRuntime(unittest.IsolatedAsyncioTestCase):
                 entity=AristonNumber(coordinator,description,1)
                 self.assertEqual(entity.unique_id,expected[description.key])
         await coordinator.async_shutdown()
+
+
+class RealSdkGovernor(unittest.IsolatedAsyncioTestCase):
+    """The governor hooks the real python-ariston-api 0.19.9 request path."""
+
+    async def test_real_aristonapi_requests_pass_through_governor(self):
+        from datetime import timezone
+        from ariston.ariston_api import AristonAPI
+        from ariston.galevo_device import AristonGalevoDevice
+        from custom_components.ariston import govern_api
+        from custom_components.ariston.cloud_governor import CloudGovernor, CloudPaused
+        import custom_components.ariston as integration
+
+        api = AristonAPI('user', 'password')
+        self.assertTrue(hasattr(api, '_AristonAPI__async_request'))
+        sent = []
+
+        async def fake_request(method, path, params=None, body=None, is_retry=False):
+            sent.append(path)
+            if 'menuItems' in path:
+                raise ConnectionException(429, b'Requests are blocked')
+            return {'token': 't'} if 'login' in path.lower() else []
+
+        api._AristonAPI__async_request = fake_request   # stands in for the network
+        governor = CloudGovernor(datetime.now(timezone.utc))
+        published = []
+        govern_api(api, governor, published.append)
+        self.assertTrue(await api.async_connect())             # login through the governor
+        with self.assertRaises(ConnectionException):
+            await api.async_get_menu_items('GW')
+        self.assertTrue(governor.paused(datetime.now(timezone.utc)))
+        with self.assertRaises(CloudPaused):
+            await api._async_get('https://example.invalid/api/v2/remote/dataItems/GW')
+        self.assertEqual(len(sent), 2)                          # nothing sent while paused
+        self.assertEqual(published, [True])
+        # The GALEVO sequences-only energy refresh exists on the real class.
+        self.assertTrue(callable(super(AristonGalevoDevice, AristonGalevoDevice).async_update_energy))
+        self.assertTrue(hasattr(integration, 'async_get_governor'))

@@ -13,6 +13,9 @@ ROOT=Path(__file__).parents[1]/'custom_components/ariston'
 import importlib.util as _ilu
 _spec=_ilu.spec_from_file_location('ariston_cloud_pacing',ROOT/'cloud_pacing.py')
 pacing=_ilu.module_from_spec(_spec);_spec.loader.exec_module(pacing)
+_gspec=_ilu.spec_from_file_location('ariston_cloud_governor',ROOT/'cloud_governor.py')
+gov=_ilu.module_from_spec(_gspec);_gspec.loader.exec_module(gov)
+class _NotGalevo:pass
 class NotReady(Exception):pass
 class AuthFailed(Exception):pass
 
@@ -42,6 +45,11 @@ class SetupTests(unittest.IsolatedAsyncioTestCase):
                    'aiohttp':NS(ClientSession=lambda **kw:NS(closed=False,close=AsyncMock()),CookieJar=lambda **kw:None),
                    'er':NS(async_get=lambda h:NS(async_get_entity_id=lambda *a:None)),
                    'update_listener':Mock(),'SET_ITEM_BY_ID_SCHEMA':{},
+                   'AristonAPI':lambda *a:NS(async_connect=api.async_connect),'govern_api':Mock(),
+                   'async_get_governor':AsyncMock(return_value=(gov.CloudGovernor(__import__('datetime').datetime.now(__import__('datetime').timezone.utc)),Mock())),
+                   'governor_trace':Mock(),'AristonGalevoDevice':_NotGalevo,'CloudPaused':gov.CloudPaused,'is_block':gov.is_block,
+                   'UpdateFailed':Exception,'ENERGY_QUIET_INTERVAL':timedelta(minutes=15),'MENU_ITEMS_REFRESH':timedelta(minutes=15),
+                   'ENERGY_AUX_REFRESH':timedelta(hours=6),
                    'AdaptivePacer':pacing.AdaptivePacer,'TIME_PROGRAM_SCAN_INTERVAL':'time_program_scan_interval',
                    'DEFAULT_TIME_PROGRAM_SCAN_INTERVAL_SECONDS':180,'PACING_TICK':timedelta(seconds=30),
                    'ENERGY_BURST_INTERVAL':timedelta(minutes=2),'ENERGY_BURST_WINDOW':timedelta(minutes=40),
@@ -91,8 +99,10 @@ class PollingTests(unittest.IsolatedAsyncioTestCase):
         class Overload(Exception):pass
         dhw=AsyncMock(return_value=None);heating=AsyncMock(return_value=None)
         pacer=pacing.AdaptivePacer(timedelta(minutes=3))
+        governor=gov.CloudGovernor(clock['now'])
         ns={'async_update_dhw_program':dhw,'async_update_heating_programs':heating,
-            'program_pacer':pacer,'dt_util':NS(utcnow=lambda:clock['now'])}
+            'program_pacer':pacer,'dt_util':NS(utcnow=lambda:clock['now']),
+            'governor':governor,'device':NS(zone_numbers=[1]),'publish_governor':lambda:None}
         refresh=self._function('async_refresh_time_programs',ns)
         ns['async_refresh_time_programs']=refresh
         tick=self._function('async_time_program_tick',ns)
@@ -117,10 +127,10 @@ class PollingTests(unittest.IsolatedAsyncioTestCase):
         now=datetime(2026,10,24,6,5,tzinfo=timezone.utc)
         device=NS(consumptions_sequences=[{'k':7}])
         gas=AsyncMock(side_effect=RuntimeError('R2 down'))
-        ns={'original_async_update_energy':AsyncMock(return_value='api'),'device':device,
+        ns={'async_update_api_energy':AsyncMock(return_value='api'),'device':device,
             'async_update_physical_gas':gas,'deepcopy':deepcopy,'_LOGGER':logging.getLogger('test.polling'),
             'dt_util':NS(now=lambda:now,utcnow=lambda:now),'r2_pacer':pacing.AdaptivePacer(timedelta(minutes=1)),
-            'schedule_energy_burst':lambda:None}
+            'schedule_energy_burst':lambda:None,'governor':gov.CloudGovernor(now),'energy_priority':lambda:'high'}
         update=self._function('async_update_energy_with_web_metering',ns)
         self.assertEqual(await update(),'api')
         gas.assert_awaited_once()
@@ -135,8 +145,10 @@ class PollingTests(unittest.IsolatedAsyncioTestCase):
         device=NS(system_type='GALEVO',gas_physical_unit_data={'histogramData':[1]},energy_sequences_snapshot=[1])
         class Coord:
             preferred_interval=None
+            base_interval=timedelta(minutes=2)
         coordinator=Coord()
-        ns={'dt_util':NS(now=lambda:clock['now']),'device':device,'SystemType':NS(GALEVO='GALEVO'),
+        quiet=timedelta(minutes=15)
+        ns={'dt_util':NS(now=lambda:clock['now']),'device':device,'SystemType':NS(GALEVO='GALEVO'),'ENERGY_QUIET_INTERVAL':quiet,
             'energy_burst':{'block':None,'start':None,'last':None,'arrived':False},
             'ENERGY_BURST_INTERVAL':timedelta(minutes=2),'ENERGY_BURST_WINDOW':timedelta(minutes=40),
             'hass':NS(data={'ariston':{'gw':{'energy':coordinator}}}),'entry':NS(unique_id='gw'),
@@ -146,16 +158,16 @@ class PollingTests(unittest.IsolatedAsyncioTestCase):
             node=next(n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name==name)
             exec(compile(ast.Module(body=[node],type_ignores=[]),name,'exec'),ns)
         burst=ns['schedule_energy_burst']
-        burst();self.assertIsNone(coordinator.preferred_interval)           # 09:50, mid-interval
+        burst();self.assertEqual(coordinator.preferred_interval,quiet)           # 09:50, mid-interval
         clock['now']=datetime(2026,10,24,10,2,tzinfo=tz)
         burst();self.assertEqual(coordinator.preferred_interval,timedelta(minutes=2))  # waiting for 08-10
         clock['now']=datetime(2026,10,24,10,14,tzinfo=tz)
         device.gas_physical_unit_data={'histogramData':[1,2]}               # 08-10 published
-        burst();self.assertIsNone(coordinator.preferred_interval)
+        burst();self.assertEqual(coordinator.preferred_interval,quiet)
         clock['now']=datetime(2026,10,24,10,30,tzinfo=tz)
-        burst();self.assertIsNone(coordinator.preferred_interval)           # stays slow in this block
+        burst();self.assertEqual(coordinator.preferred_interval,quiet)           # stays slow in this block
         clock['now']=datetime(2026,10,24,12,45,tzinfo=tz)
-        burst();self.assertIsNone(coordinator.preferred_interval)           # window over, nothing new
+        burst();self.assertEqual(coordinator.preferred_interval,quiet)           # window over, nothing new
 
     async def test_r2_requests_are_serialized(self):
         tree=ast.parse((ROOT/'__init__.py').read_text())
@@ -182,7 +194,9 @@ class CoordinatorErrors(unittest.IsolatedAsyncioTestCase):
             'UpdateFailed':UpdateFailed,'ConfigEntryAuthFailed':AuthFailed,
             'HomeAssistant':object,'AristonBaseDevice':object,'Callable':object,
             'timedelta':timedelta,'DOMAIN':'ariston','_LOGGER':logging.getLogger('test.sdk'),
-            'is_overload':pacing.is_overload,'backoff_interval':pacing.backoff_interval}
+            'is_overload':pacing.is_overload,'backoff_interval':pacing.backoff_interval,
+            'CloudPaused':gov.CloudPaused,'is_block':gov.is_block,'STALE_LIMIT':timedelta(hours=2),
+            'dt_util':NS(utcnow=lambda:__import__('datetime').datetime.now(__import__('datetime').timezone.utc))}
         node=next(n for n in ast.parse((ROOT/'coordinator.py').read_text()).body if isinstance(n,ast.ClassDef))
         exec(compile(ast.Module(body=[node],type_ignores=[]),'coordinator','exec'),ns)
         for status,error_type in ((500,UpdateFailed),(599,UpdateFailed),(401,AuthFailed),(403,AuthFailed)):
