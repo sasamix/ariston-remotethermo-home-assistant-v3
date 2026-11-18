@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.21.1 — 2026-11-18
+
+- Governor: a block in the first hour after start (carried over from before a restart)
+  pauses traffic but no longer lowers the budget — the rolling count is incomplete then.
+  0.21.0 learned "limit 18/h" from such a block at 00:34 on 18 Nov and stayed at 40/h,
+  skipping most schedule and quiet-time energy refreshes. A saved limit below 40/h is
+  discarded on load and the budget returns to 120/h.
+- The budget grows by 10/h after every hour without a block (was three hours) while it
+  actually holds work back.
+
 ## 0.21.0 — 2026-11-18
 
 Ariston answers `429 Requests are blocked` when one account sends too many requests.

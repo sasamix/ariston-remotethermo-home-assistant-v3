@@ -36,7 +36,7 @@ class GovernorUnit(unittest.TestCase):
         self.assertTrue(g.allow(T0 + timedelta(hours=1, seconds=1), "low", 1))
 
     def test_block_pauses_everything_then_one_probe(self):
-        g = gov.CloudGovernor(T0, {"budget": 120})
+        g = gov.CloudGovernor(T0 - timedelta(hours=2), {"budget": 120})
         for i in range(100):
             g.before_request(T0 + timedelta(seconds=i), "state")
         now = T0 + timedelta(minutes=5)
@@ -60,7 +60,7 @@ class GovernorUnit(unittest.TestCase):
         self.assertEqual(g.status(later)["state"], "ok")
 
     def test_pause_grows_to_one_hour(self):
-        g = gov.CloudGovernor(T0)
+        g = gov.CloudGovernor(T0 - timedelta(hours=2))
         now = T0
         pauses = []
         for _ in range(5):
@@ -90,6 +90,21 @@ class GovernorUnit(unittest.TestCase):
         g.last_change, g.limited_since_change = now - timedelta(hours=3), True
         g.allow(now, "low", 1)
         self.assertEqual(g.budget, 90)
+
+    def test_block_right_after_restart_learns_nothing(self):
+        # 2026-11-18 00:34: a block carried over from before the restart, 18
+        # requests counted; 0.21.0 learned "limit 18" and stuck at 40/h.
+        g = gov.CloudGovernor(T0, {"budget": 120})
+        for i in range(18):
+            g.before_request(T0 + timedelta(seconds=10 * i), "state")
+        g.after_block(T0 + timedelta(minutes=3))
+        self.assertEqual((g.budget, g.observed_limit), (120, None))
+        self.assertEqual(g.paused_until, T0 + timedelta(minutes=13))
+
+    def test_bad_saved_limit_from_0_21_0_is_discarded(self):
+        g = gov.CloudGovernor(T0, {"budget": 40, "observed_limit": 18,
+                                   "last_block": T0.isoformat()})
+        self.assertEqual((g.budget, g.observed_limit), (gov.DEFAULT_BUDGET, None))
 
     def test_state_survives_restart(self):
         g = gov.CloudGovernor(T0, {"budget": 120})
