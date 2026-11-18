@@ -27,7 +27,7 @@ MIN_BUDGET = 40
 MAX_BUDGET = 360
 DECREASE_FACTOR = 0.7         # budget after a block: 70 % of the rate that was blocked
 INCREASE_STEP = 10            # requests/hour added ...
-INCREASE_AFTER = timedelta(hours=3)   # ... after this long without a block
+INCREASE_AFTER = timedelta(hours=1)   # ... after this long without a block
 FIRST_PAUSE = timedelta(minutes=10)
 MAX_PAUSE = timedelta(minutes=60)
 
@@ -58,6 +58,11 @@ class CloudGovernor:
         saved = saved or {}
         self.budget = int(min(MAX_BUDGET, max(MIN_BUDGET, saved.get("budget", DEFAULT_BUDGET))))
         self.observed_limit: int | None = saved.get("observed_limit")
+        if self.observed_limit is not None and self.observed_limit < MIN_BUDGET:
+            # Learned from a block right after a restart (0.21.0): the rolling
+            # count was incomplete, so the "limit" was far too low. Forget it.
+            self.observed_limit = None
+            self.budget = max(self.budget, DEFAULT_BUDGET)
         self.blocks_total = int(saved.get("blocks_total", 0))
         self.last_block = _parse(saved.get("last_block"))
         self.last_change = _parse(saved.get("last_change")) or now
@@ -68,6 +73,8 @@ class CloudGovernor:
         self.consecutive_blocks = int(saved.get("consecutive_blocks", 0)) if self.paused_until else 0
         self.probe_pending = self.paused_until is not None
         self.requests: deque[tuple[datetime, str]] = deque()
+        # The rolling count is complete only one hour after start.
+        self.started = now
         self.skipped: Counter[str] = Counter()
         # Grow only when the budget actually held work back.
         self.limited_since_change = False
@@ -124,11 +131,15 @@ class CloudGovernor:
     def after_block(self, now: datetime) -> None:
         """Ariston blocked the account: pause everything, lower the budget."""
         rate = self.used(now)
-        recent = self.last_block is not None and now - self.last_block < timedelta(days=1)
-        if rate:
-            self.observed_limit = min(self.observed_limit, rate) if (recent and self.observed_limit) else rate
-        basis = min(self.budget, rate) if rate else self.budget
-        self.budget = max(MIN_BUDGET, int(basis * DECREASE_FACTOR))
+        if now - self.started >= HOUR:
+            recent = self.last_block is not None and now - self.last_block < timedelta(days=1)
+            if rate:
+                self.observed_limit = (min(self.observed_limit, rate)
+                                       if (recent and self.observed_limit) else rate)
+            basis = min(self.budget, rate) if rate else self.budget
+            self.budget = max(MIN_BUDGET, int(basis * DECREASE_FACTOR))
+        # Within the first hour the count misses earlier requests (e.g. a block
+        # carried over from before a restart): pause, but learn nothing.
         self.consecutive_blocks += 1
         pause = min(MAX_PAUSE, FIRST_PAUSE * (2 ** (self.consecutive_blocks - 1)))
         self.paused_until = now + pause

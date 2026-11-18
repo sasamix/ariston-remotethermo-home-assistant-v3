@@ -135,7 +135,7 @@ def _report(hass: HomeAssistant, entry: ConfigEntry, selected_device_id: str | N
     kwh = getattr(device, "r2_kwh_data", None)
     raw = getattr(device, "r2_kwh_raw", None)
     report = {
-        "build": "2026-11-18-account-governor",
+        "build": "2026-11-18-governor-learning",
         "cloud_governor": _governor_status(hass, entry),
         "coordinators": {
             name: {
